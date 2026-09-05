@@ -1,0 +1,21 @@
+[project]
+name = "tonst"
+version = "0.1.0"
+description = "Token optimization and security tool: local caching, PII redaction, and prompt trimming for LLM API calls."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.20",
+    "requests>=2.25",
+]
+
+[project.optional-dependencies]
+local-model = []  # Ollama is a separate runtime, not a pip dependency
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tonst*"]
