@@ -1,3 +1,5 @@
+![tests](https://github.com/v-nightwolf/tonst/actions/workflows/tests.yml/badge.svg)
+
 # tonst — Token Optimization & Security Tool (Proof of Concept)
 
 A drop-in wrapper around any paid LLM API call that reduces token spend and
