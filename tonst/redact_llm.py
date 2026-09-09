@@ -27,12 +27,16 @@ Design choices that matter:
   -bearing.
 - Injectable model-call function (`model_call_fn`) so this is testable
   without a real Ollama instance -- see redact_llm_test in the demo.
+- Placeholders are DETERMINISTIC (a hash of the exact span), matching
+  redact.py -- the same free-text span redacts to the same placeholder
+  on every call, which is required for cache_structuring.py's stable
+  blocks to stay byte-identical across calls when they contain PII.
 """
 
 from __future__ import annotations
+import hashlib
 import json
 import re
-import uuid
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -67,6 +71,11 @@ class LLMRedactionResult:
     mapping: dict[str, str]
     model_available: bool
     entities_found: int
+
+
+def _placeholder_for(label: str, span: str) -> str:
+    digest = hashlib.sha256(span.encode("utf-8")).hexdigest()[:8]
+    return f"[[{label}_{digest}]]"
 
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
@@ -143,7 +152,7 @@ class LLMRedactor:
             # really there should not corrupt the output.
             if span not in result_text:
                 continue
-            placeholder = f"[[{label}_{uuid.uuid4().hex[:8]}]]"
+            placeholder = _placeholder_for(label, span)
             mapping[placeholder] = span
             # Replace only the first remaining occurrence per entity so
             # repeated identical spans (e.g. a name used twice) each get

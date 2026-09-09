@@ -2,8 +2,8 @@
 real_api_demo.py
 ----------------
 Wires TonstClient to the REAL Claude API (api.anthropic.com), not a mock.
-Everything upstream of the actual HTTP call -- caching, redaction,
-trimming -- runs exactly as it does in demo.py. Only `call_fn` changes.
+Everything upstream of the actual HTTP call -- redaction and trimming --
+runs exactly as it does in demo.py. Only `call_fn` changes.
 
 Setup:
     1. Get an API key from https://console.anthropic.com
@@ -21,20 +21,19 @@ import sys
 import subprocess
 
 
-def _ensure_dependencies():
-    required = {"requests": "requests>=2.25", "numpy": "numpy>=1.20"}
-    missing = [spec for mod, spec in required.items() if not _try_import(mod)]
-    if missing:
-        print(f"Installing missing dependencies: {', '.join(missing)}")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
-
-
 def _try_import(module_name: str) -> bool:
     try:
         __import__(module_name)
         return True
     except ImportError:
         return False
+
+
+def _ensure_dependencies():
+    if _try_import("requests"):
+        return
+    print("Installing missing dependency: requests>=2.25")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests>=2.25"])
 
 
 _ensure_dependencies()
@@ -49,9 +48,9 @@ MODEL = "claude-sonnet-4-6"
 def call_claude(prompt: str) -> str:
     """
     This is the ONE function tonst wraps. Everything before this call
-    (cache check, redaction, trimming) has already happened by the time
-    this runs -- `prompt` here is the trimmed, redacted text, never the
-    user's raw original.
+    (redaction, trimming) has already happened by the time this runs --
+    `prompt` here is the trimmed, redacted text, never the user's raw
+    original.
     """
     if not ANTHROPIC_API_KEY:
         raise RuntimeError(
@@ -87,9 +86,9 @@ def main():
     if not ANTHROPIC_API_KEY:
         print(
             "No ANTHROPIC_API_KEY set. This will run the full tonst pipeline\n"
-            "(cache check, redaction, trimming) and then fail at the actual\n"
-            "API call with a clean authentication_error -- which confirms\n"
-            "everything up to that point is wired correctly.\n"
+            "(redaction, trimming) and then fail at the actual API call with\n"
+            "a clean authentication_error -- which confirms everything up to\n"
+            "that point is wired correctly.\n"
         )
 
     client = TonstClient(call_fn=call_claude)

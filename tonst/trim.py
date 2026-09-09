@@ -40,6 +40,12 @@ def truncate_history(messages: list[dict], keep_last_n: int = 6, keep_system: bo
     """
     Keep the system prompt (if any) plus only the most recent N turns.
     Old turns are the single biggest silent token cost in chat apps.
+
+    This is the plain, always-available fallback: it just drops the
+    older turns with no summary. For a version that condenses the
+    dropped turns into a summary instead of discarding them outright,
+    see compactor.compact_history() -- same selection logic (system +
+    last N), but backed by a local model.
     """
     if not messages:
         return messages
@@ -48,6 +54,16 @@ def truncate_history(messages: list[dict], keep_last_n: int = 6, keep_system: bo
     other_msgs = [m for m in messages if m.get("role") != "system"]
     trimmed = other_msgs[-keep_last_n:]
     return system_msgs + trimmed
+
+
+def flatten_messages(messages: list[dict]) -> str:
+    """
+    Joins a list of {"role", "content"} messages into a single flat
+    string, in order, for tonst's string-based pipeline (query()).
+    Used by TonstClient.query_messages() after history
+    truncation/compaction has already reduced the message list.
+    """
+    return "\n\n".join(f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in messages)
 
 
 def mechanical_trim(text: str) -> str:

@@ -11,11 +11,21 @@ on modest hardware. For production you'd likely pair this with a small
 local model (via Ollama) for fuzzier redaction (e.g. free-text names),
 but regex covers the highest-value, highest-confidence categories:
 emails, phone numbers, card numbers, SSN-like IDs, and IP addresses.
+
+Placeholders are DETERMINISTIC: a hash of the original value, not a
+random UUID. This matters beyond just "same input -> same output" --
+cache_structuring.py relies on stable/system content being byte-for-byte
+identical across calls for provider-side prompt caching to work. If the
+same email address redacted to a different random placeholder on every
+call, a stable block containing it would never match its own previous
+version, silently defeating caching every single time. A hash gives the
+same placeholder for the same value, every call, while still not
+revealing the original.
 """
 
 from __future__ import annotations
+import hashlib
 import re
-import uuid
 from dataclasses import dataclass, field
 
 # Order matters: more specific patterns first so they aren't partially
@@ -29,6 +39,26 @@ PATTERNS: dict[str, re.Pattern] = {
 }
 
 
+def _placeholder_for(label: str, original: str) -> str:
+    digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:8]
+    return f"[[{label}_{digest}]]"
+
+
+def restore_placeholders(text: str, mapping: dict[str, str]) -> str:
+    """
+    Re-insert real values wherever a placeholder from `mapping` appears
+    in `text`. Free function (not tied to a RedactionResult instance) so
+    callers who accumulate a mapping across multiple redaction passes --
+    e.g. TonstClient.query_messages(), which redacts several messages
+    before combining them -- can restore against the combined mapping
+    without constructing a throwaway RedactionResult just to call
+    .restore() on it.
+    """
+    for placeholder, original in mapping.items():
+        text = text.replace(placeholder, original)
+    return text
+
+
 @dataclass
 class RedactionResult:
     redacted_text: str
@@ -38,9 +68,7 @@ class RedactionResult:
 
     def restore(self, text: str) -> str:
         """Re-insert real values into a model response that may echo placeholders."""
-        for placeholder, original in self.mapping.items():
-            text = text.replace(placeholder, original)
-        return text
+        return restore_placeholders(text, self.mapping)
 
 
 def redact(text: str) -> RedactionResult:
@@ -54,7 +82,7 @@ def redact(text: str) -> RedactionResult:
             digits_only = re.sub(r"\D", "", original)
             if label in ("CREDIT_CARD", "PHONE", "SSN_LIKE") and len(digits_only) < 7:
                 return original
-            placeholder = f"[[{label}_{uuid.uuid4().hex[:8]}]]"
+            placeholder = _placeholder_for(label, original)
             mapping[placeholder] = original
             return placeholder
 

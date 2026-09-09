@@ -22,3 +22,6 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local throwaway test scripts, never part of the repo
+_scratch_to_delete/
