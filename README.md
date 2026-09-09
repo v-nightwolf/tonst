@@ -39,20 +39,45 @@ of dropping it outright — see "History compaction" below.
 
 Tested against the actual `api.anthropic.com` endpoint on 2026-09-05, using
 a realistic support-chat prompt with duplicated system instructions and
-embedded PII:
+embedded PII (`claude-sonnet-4-6`, the model `real_api_demo.py` targets):
 
 | | Short, clean prompt | Realistic bloated prompt |
 |---|---|---|
 | Original tokens | 26 | 186 |
 | Tokens sent to API | 26 | 136 |
 | **Tokens saved** | 0 (0.0%) | **50 (26.9%)** |
+| Estimated cost, no tonst | $0.000078 | $0.000558 |
+| Estimated cost, with tonst | $0.000078 | $0.000408 |
+| **Cost saved** | $0.00 (0.0%) | **$0.00015 (26.9%)** |
 | PII fields redacted | 1 | 3 |
+
+(Cost figures use `claude-sonnet-4-6`'s published standard input rate,
+$3 / million tokens as of this writing — verify current pricing before
+relying on this for real budgeting, per the same caveat that applies
+throughout this README.)
 
 The 0% result on the short prompt is intentionally included here, not
 hidden — tonst doesn't manufacture savings where none exist. Real prompts
 with any duplication, verbose history, or repeated instructions (the
 overwhelming majority of real chat-app traffic) see meaningful reduction;
 a single already-minimal prompt does not, and shouldn't.
+
+**Why cost tracks tokens 1:1 here, unlike the prompt-caching results
+further down**: this test measures plain trimming — literally sending
+fewer tokens at the same standard price, no discount or premium
+multiplier involved. That's a meaningfully different mechanism from
+prompt caching (see "Prompt-caching structuring" and "Testing against
+a real provider" below), where token count never drops and the entire saving comes from
+a *cheaper price per token* on a cache hit instead. Both are real cost
+reductions; they just come from different places, and tonst reports
+both correctly rather than treating "tokens saved" as a universal proxy
+for "money saved."
+
+At real traffic volumes the fractions of a cent above add up: an app
+sending 100,000 requests/day with this same 50-token, 26.9% overhead
+would save an estimated **$15.00/day, or about $5,475/year**, on this
+one mechanical trimming pass alone — before any prompt-caching savings
+on top of it.
 
 Reproduce this yourself with `real_api_demo.py` (see below).
 
