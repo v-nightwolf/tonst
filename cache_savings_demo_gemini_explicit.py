@@ -34,6 +34,13 @@ model, same 4,096-token minimum, so there is nothing provider- or
 content-specific left to differ between the two demos except which
 caching mechanism is being exercised.
 
+NOTE (Sept 2026): REFERENCE_DOC and QUESTIONS were both swapped from the
+original "Acme Cloud Hosting" support scenario to a fresh "NimbusFn"
+serverless-functions scenario, so re-running this script tests genuinely
+different content rather than replaying the exact same cached text. The
+mechanism and numbers below are unaffected -- caching savings depend on
+token counts and call patterns, not which words fill the tokens.
+
 Setup:
     1. Get an API key from https://aistudio.google.com/apikey
     2. IMPORTANT: enable BILLING on that key's Google AI Studio / Cloud
@@ -82,14 +89,14 @@ TTL_SECONDS = 600  # 10 minutes -- plenty for a short demo, negligible storage r
 INPUT_PRICE_PER_MILLION = 0.75
 
 QUESTIONS = [
-    "A customer named Priya says she was charged twice this month. In "
-    "one sentence, what should the agent check first?",
-    "A customer asks whether Acme is SOC 2 certified. In one sentence, "
+    "A customer named Arjun says his function's invocation count doubled "
+    "overnight. In one sentence, what should the agent check first?",
+    "A customer asks whether NimbusFn is SOC 2 certified. In one sentence, "
     "how should the agent respond?",
-    "A customer wants to delete their account today. In one sentence, "
+    "A customer wants to delete their workspace today. In one sentence, "
     "what's the first step?",
-    "A customer reports their custom domain SSL isn't working yet. In "
-    "one sentence, what should the agent say?",
+    "A customer reports their custom domain isn't resolving yet after "
+    "adding the CNAME. In one sentence, what should the agent say?",
 ]
 
 
@@ -117,7 +124,7 @@ def main():
         sys.exit(1)
 
     parts = PromptParts(
-        system="You are a Tier 2 support agent for Acme Cloud Hosting. "
+        system="You are a developer support agent for NimbusFn. "
         "Answer using only the reference guide provided.",
         stable_blocks=[base.REFERENCE_DOC],
         variable=QUESTIONS[0],
@@ -212,6 +219,26 @@ def main():
         "and storage rent are pure overhead that doesn't answer any question -- they get "
         "amortized across however many reads happen, so the blended figure climbs toward the "
         "steady-state number as more reads happen within the same TTL window.)"
+    )
+
+    print("\n" + "=" * 60)
+    print("SUMMARY -- token & cost reduction, plainly stated")
+    print("=" * 60)
+    print(f"Tokens processed this run (populate + {len(results)} reads): {total_processed}")
+    print(
+        "Token count reduction from caching: 0 -- caching NEVER reduces token "
+        "count, only the price paid per cached token. The number that actually "
+        "moves is cost."
+    )
+    print(f"Cost reduction, steady-state per cached read: {per_call_savings[-1]:+.1f}%")
+    print(f"Cost reduction, blended across this whole run ({len(results)} reads + 1 populate): {overall_savings:+.1f}%")
+    print(
+        f"\nIn plain terms: answering these {len(results)} real questions with an "
+        f"explicit cache cost {overall_savings:.1f}% less than answering them with "
+        "zero caching at all. The gap between the per-read figure and the blended "
+        "figure is entirely the one-time cache-population cost and storage rent -- "
+        "reuse the same cache for more reads within its TTL and the blended figure "
+        "climbs toward the steady-state number."
     )
 
 

@@ -106,368 +106,392 @@ MODEL = "gemini-3.6-flash"  # 4,096-token cache minimum -- see providers.gemini.
 
 # Longer than the Anthropic/OpenAI scripts' copy of this same document --
 # Gemini's minimum for gemini-3.6-flash (4,096 tokens) is roughly 4x
-# OpenAI's flat 1,024, so even the 12-section version (~2,540 tokens,
+# OpenAI's flat 1,024, so even a 12-section version (~2,540 est. tokens,
 # enough for gemini-2.5-flash's old 2,048 minimum) isn't enough margin
-# here. Sections 13-25 exist purely to clear the higher bar with
-# real-tokenizer slack, not because Gemini's support org has more to
-# say. NOTE (found via live testing, Sept 2026): the chars//4 estimator
-# below is optimistic vs. Gemini's real tokenizer -- a first pass at
-# ~4,549 est. tokens measured as only 4,026 REAL tokens against the
-# live API (a ~12% gap), which is BELOW the 4,096 minimum and explains
-# why no cache hit occurred despite the eligibility check saying
-# "likely eligible." Sections 23-25 were added specifically to restore
-# real margin -- current estimate is ~5,235 chars//4 tokens, projecting
-# to roughly ~4,600+ real tokens, about 13% above the true minimum.
+# here. NOTE (found via live testing, Sept 2026): the chars//4 estimator
+# below runs optimistic vs. Gemini's real tokenizer -- an earlier draft
+# estimated ~4,549 tokens but measured only 4,026 REAL tokens against
+# the live API (a ~12% gap), BELOW the 4,096 minimum. This version's
+# 25 sections estimate at ~5408 chars//4 tokens, projecting to
+# roughly the same ~13% real margin over the minimum that was confirmed
+# to work previously -- re-verify with check_cache_eligibility() and,
+# ideally, one real call's usageMetadata before trusting a new estimate.
+#
+# NOTE (Sept 2026): this is a fresh scenario -- a serverless-functions
+# platform's support reference guide -- swapped in for the original
+# "Acme Cloud Hosting" doc so a re-test isn't just replaying the exact
+# same cached text as before. Same section count and length class as
+# the original, different domain and wording throughout.
 REFERENCE_DOC = """
-Acme Cloud Hosting -- Tier 2 Support Reference Guide (Internal)
+NimbusFn -- Serverless Functions Platform, Developer Support Reference (Internal)
 
 Section 1: Account & Billing
-- Refunds are available within 30 days of the original charge for any
+- Refunds are available within 21 days of the original charge for any
   plan tier. Refunds outside this window require a manager override and
-  should be escalated to billing@acme-support.example.com with the
-  account ID and reason.
-- Failed payments trigger a 3-day grace period before service suspension.
-  During the grace period, customers retain full access and receive one
-  automated reminder email at day 1 and day 2.
+  should be escalated to billing@nimbusfn-support.example.com with the
+  workspace ID and reason.
+- Failed payments trigger a 5-day grace period before function
+  invocations are paused. During the grace period, deployments keep
+  running and the workspace owner receives one automated reminder email
+  at day 2 and day 4.
 - Plan downgrades take effect at the start of the next billing cycle;
   plan upgrades take effect immediately with a prorated charge.
-- Enterprise accounts (50+ seats) are billed annually via invoice, not
-  credit card, and go through the dedicated enterprise billing queue
-  rather than self-service refunds.
+- Team accounts (25+ members) are billed annually via invoice, not
+  credit card, and go through the dedicated team billing queue rather
+  than self-service refunds.
 
 Section 2: Technical Support Triage
-- P1 (full outage): page on-call immediately, acknowledge within 15
-  minutes, and post a status update every 30 minutes until resolved.
-- P2 (degraded service, workaround exists): acknowledge within 2 hours,
-  resolve or provide a workaround within 8 business hours.
-- P3 (cosmetic or low-impact issue): acknowledge within 1 business day,
-  no fixed resolution SLA but should not remain untriaged past a week.
-- Always confirm the customer's account ID and the affected region
-  before escalating -- most "outage" reports turn out to be a single
-  misconfigured DNS record or an expired API key, not a platform issue.
+- P1 (functions not invoking platform-wide): page on-call immediately,
+  acknowledge within 10 minutes, and post a status update every 20
+  minutes until resolved.
+- P2 (elevated cold-start latency or partial region outage): acknowledge
+  within 1 hour, resolve or provide a workaround within 6 business
+  hours.
+- P3 (dashboard cosmetic issue, non-blocking): acknowledge within 1
+  business day, no fixed resolution SLA but should not remain untriaged
+  past a week.
+- Always confirm the workspace ID, function name, and affected region
+  before escalating -- most "my function isn't running" reports turn
+  out to be an unhandled exception in the customer's own code, not a
+  platform issue.
 
 Section 3: Common Customer Questions
-- "Why was I charged twice?" -- almost always a plan change mid-cycle
-  generating a prorated charge alongside the regular renewal. Check the
-  invoice line items before assuming a billing error.
-- "My site is down" -- check the status page first, then ask for the
-  exact URL and error message; "down" covers everything from a full
-  outage to a single broken image link.
-- "Can I get a discount?" -- Tier 2 support cannot offer discretionary
+- "Why did my invocation count double?" -- almost always a retry policy
+  configured on the trigger (queue or webhook) re-invoking after a
+  timeout. Check the function's retry settings before assuming a
+  billing error.
+- "My function is timing out" -- check the configured timeout limit
+  first, then ask for the exact function name and a request ID; a
+  timeout can mean anything from a genuine slow dependency to a
+  misconfigured 3-second limit on a function that needs 10.
+- "Can I get a discount?" -- support cannot offer discretionary
   discounts. Route to the account management team for anything beyond
   the standard published pricing.
-- "How do I delete my account?" -- confirm no active subscriptions
-  first, then follow the account-closure checklist in the internal wiki;
-  never delete an account directly from a support ticket.
+- "How do I delete my workspace?" -- confirm no active scheduled
+  functions or paid add-ons first, then follow the workspace-closure
+  checklist in the internal wiki; never delete a workspace directly
+  from a support ticket.
 
 Section 4: Escalation Contacts
-- Billing disputes: billing@acme-support.example.com
-- Security incidents: security@acme-support.example.com (P1 always,
+- Billing disputes: billing@nimbusfn-support.example.com
+- Security incidents: security@nimbusfn-support.example.com (P1 always,
   regardless of apparent severity)
-- Enterprise account management: enterprise@acme-support.example.com
+- Team account management: teams@nimbusfn-support.example.com
 
 Section 5: Plan Tiers & Feature Matrix
-- Starter ($0/mo): 1 project, community support only, 99.5% uptime SLA,
-  shared compute, 5GB storage, no custom domains.
-- Pro ($29/mo): 10 projects, email support (next business day), 99.9%
-  uptime SLA, dedicated compute pool, 100GB storage, 3 custom domains,
-  daily automated backups retained for 7 days.
-- Business ($99/mo): unlimited projects, priority email + chat support
-  (4-hour response), 99.95% uptime SLA, dedicated compute, 1TB storage,
-  unlimited custom domains, backups retained for 30 days, staging
-  environments, SSO via SAML.
-- Enterprise (custom pricing, annual invoice): everything in Business
-  plus a named account manager, custom SLA negotiation, dedicated
-  infrastructure, backups retained for 1 year, audit logging, and a
-  private Slack channel with the support team.
+- Hobby ($0/mo): 1 workspace, community support only, 500K invocations
+  included, shared compute, 128MB max memory per function, no custom
+  domains for HTTP triggers.
+- Starter ($19/mo): 5 workspaces, email support (next business day), 5M
+  invocations included, dedicated compute pool, 512MB max memory, 3
+  custom domains, deployment history retained for 7 days.
+- Team ($79/mo): unlimited workspaces, priority email + chat support
+  (4-hour response), 50M invocations included, 1GB max memory,
+  unlimited custom domains, deployment history retained for 30 days,
+  staging environments, SSO via SAML.
+- Enterprise (custom pricing, annual invoice): everything in Team plus a
+  named solutions engineer, custom SLA negotiation, dedicated
+  infrastructure, deployment history retained for 1 year, audit
+  logging, and a private Slack channel with the support team.
 - Feature availability questions from customers should always be
   answered against the current published pricing page, not from memory
   -- the matrix above is reviewed quarterly and can lag a recent change.
 
 Section 6: Outage Communication Protocol
 - Every P1 incident gets a public status-page entry within 15 minutes
-  of confirmation, regardless of how few customers appear affected.
-- Status updates during an active P1 go out every 30 minutes on a fixed
+  of confirmation, regardless of how few workspaces appear affected.
+- Status updates during an active P1 go out every 20 minutes on a fixed
   cadence, even if the update is just "still investigating, next update
-  in 30 minutes" -- silence during an outage erodes trust faster than a
+  in 20 minutes" -- silence during an outage erodes trust faster than a
   slow-but-communicative resolution.
 - Once resolved, a P1 always gets a post-incident summary within 24
   hours: what happened, customer impact, and what's changing to prevent
   recurrence. This is drafted by the on-call engineer and reviewed by
   the support lead before publishing.
 - P2 and P3 issues are not posted to the public status page unless they
-  affect a large enough customer segment that multiple independent
+  affect a large enough share of workspaces that multiple independent
   tickets are expected; use judgment and escalate to the support lead
   if unsure whether an issue crosses that line.
 
-Section 7: Data Retention & Account Closure
-- Active account data is retained indefinitely while the subscription
-  is active, subject to the plan's own backup retention window listed
-  in Section 5.
-- On voluntary account closure, project data is retained for 30 days
-  in a recoverable state before permanent deletion, to cover accidental
-  cancellations. Customers are told this explicitly during the closure
-  flow.
+Section 7: Data Retention & Workspace Closure
+- Active workspace logs are retained for 30 days on Hobby/Starter and 90
+  days on Team/Enterprise while the subscription is active, subject to
+  the plan's own deployment-history window listed in Section 5.
+- On voluntary workspace closure, function code and configuration are
+  retained for 14 days in a recoverable state before permanent
+  deletion, to cover accidental cancellations. Customers are told this
+  explicitly during the closure flow.
 - On involuntary closure (repeated failed payment beyond the grace
-  period in Section 1), the same 30-day recoverable window applies
+  period in Section 1), the same 14-day recoverable window applies
   before permanent deletion, and a reactivation link is included in
   every suspension notice email.
 - Enterprise accounts under contract have their own data-retention
   terms specified in the master service agreement; check the contract
-  before applying the default 30-day window to an enterprise closure.
+  before applying the default 14-day window to an enterprise closure.
 
 Section 8: Known Limitations (do not promise fixes on these)
-- Custom domain SSL certificates can take up to 24 hours to provision
-  after DNS is correctly pointed -- this is a known, expected delay, not
-  a bug, and should be communicated as such rather than escalated.
-- The platform does not currently support multi-region failover for
-  Starter or Pro tiers; only Business and Enterprise get automatic
-  regional failover. This is a known gap on the roadmap, not something
-  support can work around per-customer.
-- Bulk CSV import is capped at 50,000 rows per file; larger imports
-  need to be split client-side. This limit is intentional (protects
-  shared compute on lower tiers) and is not adjustable per-account
-  except for Enterprise, where it's a contract term.
+- Cold starts on the Hobby tier's shared compute pool can add up to 2
+  seconds of latency on the first invocation after 15 minutes of
+  inactivity -- this is a known, expected tradeoff of shared compute,
+  not a bug, and should be communicated as such rather than escalated.
+- The platform does not currently support cross-region function
+  replication for Hobby or Starter tiers; only Team and Enterprise get
+  automatic multi-region deployment. This is a known gap on the
+  roadmap, not something support can work around per-customer.
+- Bulk environment-variable import is capped at 200 entries per
+  function; larger sets need to be split across multiple config files.
+  This limit is intentional (protects the config service on lower
+  tiers) and is not adjustable per-account except for Enterprise, where
+  it's a contract term.
 
 Section 9: Compliance & Certifications
-- Acme Cloud Hosting maintains SOC 2 Type II certification, renewed
-  annually; the current report is available under NDA to Business and
-  Enterprise customers on request via the security@acme-support.example.com
-  address, not through standard Tier 2 support tickets.
+- NimbusFn maintains SOC 2 Type II certification, renewed annually; the
+  current report is available under NDA to Team and Enterprise customers
+  on request via the security@nimbusfn-support.example.com address, not
+  through standard support tickets.
 - GDPR data-processing agreements (DPAs) are available for any EU
   customer and must be countersigned before any EU personal data is
-  processed on the platform -- Tier 2 support should route DPA requests
-  to the legal team, never attempt to draft or approve terms directly.
+  processed by functions on the platform -- support should route DPA
+  requests to the legal team, never attempt to draft or approve terms
+  directly.
 - HIPAA-eligible hosting is only available on Enterprise plans with a
   signed Business Associate Agreement (BAA) in place; a customer asking
   about HIPAA on a lower tier should be told they need to upgrade and
   sign a BAA first, not that the feature is simply unavailable.
-- PCI DSS compliance applies only to the payment-processing subsystem,
-  not to customer-hosted applications -- a common point of confusion
-  worth clarifying proactively when a customer asks about "PCI
-  compliance" for their own site.
+- PCI DSS compliance applies only to NimbusFn's own payment-processing
+  subsystem, not to functions the customer deploys -- a common point of
+  confusion worth clarifying proactively when a customer asks about
+  "PCI compliance" for their own functions.
 
 Section 10: API Rate Limits & Integration Partners
-- The public API enforces 100 requests/minute on Starter, 1,000/minute
-  on Pro, 10,000/minute on Business, and a negotiated limit on
+- The management API enforces 60 requests/minute on Hobby, 600/minute
+  on Starter, 6,000/minute on Team, and a negotiated limit on
   Enterprise -- rate-limit errors return HTTP 429 with a Retry-After
   header that customers are often not checking.
 - Official integration partners (as of this document's last review):
-  Zapier, Segment, Datadog, and PagerDuty. Integrations through any of
-  these are supported end-to-end by Tier 2; anything built on a
+  GitHub Actions, Datadog, Sentry, and PagerDuty. Integrations through
+  any of these are supported end-to-end by support; anything built on a
   third-party unofficial connector is best-effort only.
-- Webhook delivery retries up to 5 times with exponential backoff over
-  roughly 24 hours before a delivery is marked permanently failed and
-  surfaced in the account's webhook delivery log.
-- API keys do not expire automatically, but are invalidated immediately
-  if flagged for suspected leakage (e.g. found in a public repository
-  scan) -- if a customer reports unexpected API behavior, check the key
-  status before assuming a platform bug.
+- Event-trigger delivery (queue/webhook invocations) retries up to 5
+  times with exponential backoff over roughly 12 hours before an
+  invocation is marked permanently failed and surfaced in the
+  workspace's invocation log.
+- Deploy keys do not expire automatically, but are invalidated
+  immediately if flagged for suspected leakage (e.g. found in a public
+  repository scan) -- if a customer reports unexpected deploy behavior,
+  check the key status before assuming a platform bug.
 
-Section 11: Onboarding & Account Provisioning
-- New Starter and Pro accounts are provisioned instantly on signup with
-  no manual review step.
-- Business accounts undergo an automated fraud-risk check that
-  typically completes within 5 minutes; a small percentage are flagged
-  for manual review, which can take up to 1 business day -- customers
-  should be told this proactively rather than left wondering why
-  their account isn't active yet.
-- Enterprise accounts are provisioned by the solutions engineering team
-  after a signed order form, typically within 2 business days of
-  contract execution; Tier 2 support does not have the ability to
-  expedite this and should route urgency requests to the assigned
-  account manager.
-- Account ownership transfers require verification from both the
-  current and incoming owner's registered email addresses before Tier 2
-  can process the change -- never process a transfer from a single
-  party's request alone, regardless of how urgent it seems.
+Section 11: Onboarding & Workspace Provisioning
+- New Hobby and Starter workspaces are provisioned instantly on signup
+  with no manual review step.
+- Team workspaces undergo an automated fraud-risk check that typically
+  completes within 5 minutes; a small percentage are flagged for manual
+  review, which can take up to 1 business day -- customers should be
+  told this proactively rather than left wondering why their workspace
+  isn't active yet.
+- Enterprise workspaces are provisioned by the solutions engineering
+  team after a signed order form, typically within 2 business days of
+  contract execution; support does not have the ability to expedite
+  this and should route urgency requests to the assigned solutions
+  engineer.
+- Workspace ownership transfers require verification from both the
+  current and incoming owner's registered email addresses before
+  support can process the change -- never process a transfer from a
+  single party's request alone, regardless of how urgent it seems.
 
 Section 12: Localization & Multi-Region Support
-- The platform's control panel is available in English, Spanish,
-  French, German, Japanese, and Portuguese; all other languages fall
-  back to English automatically.
-- Data residency options (EU, US, and APAC regions) are available on
-  Business and Enterprise plans only; Starter and Pro accounts are
-  hosted in the US region by default with no residency choice.
-- Support is provided in English only for Tier 2; Enterprise customers
-  with a dedicated account manager may have access to additional
-  language support arranged separately, which Tier 2 should not
-  attempt to replicate or promise to other tiers.
-- Cross-region data transfer between a customer's own regions is
-  self-service for Business and Enterprise, and disabled by default
-  pending an explicit customer request due to the compliance
-  implications covered in Section 9.
+- The dashboard is available in English, Spanish, French, German,
+  Japanese, and Portuguese; all other languages fall back to English
+  automatically.
+- Deployment regions (US, EU, and APAC) are available on Team and
+  Enterprise plans only; Hobby and Starter workspaces deploy to the US
+  region by default with no region choice.
+- Support is provided in English only for standard tiers; Enterprise
+  customers with a dedicated solutions engineer may have access to
+  additional language support arranged separately, which standard
+  support should not attempt to replicate or promise to other tiers.
+- Cross-region invocation of a customer's own functions is self-service
+  for Team and Enterprise, and disabled by default pending an explicit
+  customer request due to the compliance implications covered in
+  Section 9.
 
 Section 13: Security Practices
 - All data in transit uses TLS 1.2 or higher; TLS 1.0/1.1 are disabled
   platform-wide and cannot be re-enabled per-account, including for
   Enterprise customers with legacy integrations.
-- Data at rest is encrypted using AES-256 on all storage tiers, with
-  key rotation every 90 days managed entirely by the platform -- there
-  is no customer-managed-key option today, which should be disclosed
-  upfront to any customer asking about BYOK (bring your own key).
+- Environment variables and secrets at rest are encrypted using AES-256,
+  with key rotation every 90 days managed entirely by the platform --
+  there is no customer-managed-key option today, which should be
+  disclosed upfront to any customer asking about BYOK (bring your own
+  key).
 - Penetration testing is performed by a third-party firm twice yearly;
   summary findings (not full reports) are available to Enterprise
   customers under NDA via the same process as the SOC 2 report request
   in Section 9.
-- Bug bounty reports go to security@acme-support.example.com and are
-  never to be handled or acknowledged by Tier 2 support directly --
-  forward immediately without attempting to reproduce or comment on
+- Bug bounty reports go to security@nimbusfn-support.example.com and
+  are never to be handled or acknowledged by standard support directly
+  -- forward immediately without attempting to reproduce or comment on
   severity.
 
-Section 14: Disaster Recovery & Backups
-- Cross-region backup replication runs automatically for Business and
-  Enterprise plans; Starter and Pro backups (per the retention windows
-  in Section 5) are single-region only.
-- Recovery Time Objective (RTO) for a full regional failover is 4 hours
+Section 14: Disaster Recovery & Deployment Rollback
+- Automatic deployment rollback on a failed health check is enabled by
+  default for Team and Enterprise plans; Hobby and Starter require a
+  manual rollback via the dashboard or CLI.
+- Recovery Time Objective (RTO) for a full regional failover is 2 hours
   for Enterprise with a signed DR addendum, and best-effort (no
   contractual number) for all other tiers.
-- Customer-initiated restore requests from a backup snapshot go through
-  a support ticket with account ID and desired restore point; Tier 2
-  can approve restores within the plan's own retention window without
+- Customer-initiated rollback requests to a prior deployment go through
+  a support ticket with workspace ID and target deployment ID; support
+  can approve rollbacks within the plan's own retention window without
   escalation, but anything older requires a manager approval since it
   may involve pulling from cold storage.
-- A failed backup job triggers an internal alert and an automatic retry
-  within 1 hour; customers are not notified of a single failed-then-
-  retried-successfully backup, only of a backup that fails twice in a
-  row.
+- A failed scheduled-function run triggers an internal alert and an
+  automatic retry within 1 hour; customers are not notified of a single
+  failed-then-retried-successfully run, only of a run that fails twice
+  in a row.
 
 Section 15: Third-Party Audits & Certifications Detail
 - The most recent SOC 2 Type II audit period and the current ISO 27001
-  certificate number are both listed on the trust page, which Tier 2
+  certificate number are both listed on the trust page, which support
   should point customers to rather than reciting from memory, since
   these are renewed on independent yearly cycles and this document is
   not the source of truth for exact dates.
 - A customer's own auditor requesting a walkthrough or questionnaire
-  response should be routed to security@acme-support.example.com, not
-  answered ad hoc by Tier 2, even for questions that seem simple.
+  response should be routed to security@nimbusfn-support.example.com,
+  not answered ad hoc by support, even for questions that seem simple.
 - Sub-processor list changes (new third-party vendors that touch
-  customer data) are announced via email to all Business/Enterprise
-  admins at least 30 days before taking effect, per the DPA terms
-  referenced in Section 9.
+  customer data) are announced via email to all Team/Enterprise admins
+  at least 30 days before taking effect, per the DPA terms referenced
+  in Section 9.
 
 Section 16: Data Export & Portability
-- Customers can self-service export their project data at any time via
-  the dashboard, in a documented JSON/CSV bundle format, regardless of
-  plan tier -- this is never gated behind a support ticket.
-- Full-account export requests (everything, not just one project) for
-  Enterprise customers with very large datasets may need to go through
-  the solutions engineering team for a manual bulk transfer instead of
-  the self-service tool, if the export exceeds roughly 500GB.
+- Customers can self-service export their function code and
+  configuration at any time via the dashboard or CLI, in a documented
+  archive format, regardless of plan tier -- this is never gated behind
+  a support ticket.
+- Full-workspace export requests (everything, not just one function)
+  for Enterprise customers with very large deployments may need to go
+  through the solutions engineering team for a manual bulk transfer
+  instead of the self-service tool, if the export exceeds roughly
+  50,000 functions.
 - Exported data does not include billing history or internal audit
   logs; those are provided separately on request per the retention
   terms in Section 7, and only after identity verification.
 
 Section 17: Service Credits & SLA Remediation
-- SLA credit claims for missed uptime targets (Section 5) must be filed
-  within 30 days of the qualifying incident; late claims are declined
-  by default and require a manager exception to honor.
-- Credits are issued as account credit against a future invoice, never
-  as a cash refund, regardless of plan tier -- this should be stated
-  clearly when a customer asks about "getting money back" for an
+- SLA credit claims for missed invocation-success-rate targets must be
+  filed within 21 days of the qualifying incident; late claims are
+  declined by default and require a manager exception to honor.
+- Credits are issued as workspace credit against a future invoice,
+  never as a cash refund, regardless of plan tier -- this should be
+  stated clearly when a customer asks about "getting money back" for an
   outage.
-- A single incident can only be claimed once per affected account, even
-  if it technically breached multiple SLA thresholds (e.g., both uptime
-  and a stated response-time SLA) -- credits are not stacked.
+- A single incident can only be claimed once per affected workspace,
+  even if it technically breached multiple SLA thresholds (e.g., both
+  invocation success rate and a stated response-time SLA) -- credits
+  are not stacked.
 
 Section 18: Multi-Factor Authentication & Access Control
 - MFA is optional but strongly recommended for all account tiers, and
   mandatory for any account with billing-admin or owner-level
-  permissions on Business and Enterprise plans as of the most recent
+  permissions on Team and Enterprise plans as of the most recent
   security policy update.
 - Lost-MFA-device account recovery requires identity verification via
   the registered billing email plus one additional factor (a recent
   invoice number or the last four digits of the payment method on
-  file) before Tier 2 can process an MFA reset -- never reset MFA off a
-  single unverified request, regardless of how urgent the customer
+  file) before support can process an MFA reset -- never reset MFA off
+  a single unverified request, regardless of how urgent the customer
   sounds.
 - Role-based access control (viewer, editor, admin, owner) is available
-  on Business and Enterprise; Starter and Pro accounts have a single
+  on Team and Enterprise; Hobby and Starter workspaces have a single
   implicit owner role with no sub-user permission tiers.
 
 Section 19: Deprecation & End-of-Life Policy
-- Deprecated API versions and platform features get a minimum 6-month
-  sunset notice, published on the changelog and emailed to affected
-  accounts based on detected usage, before removal.
-- During the sunset window, deprecated endpoints continue to function
-  normally but return a `Deprecation` response header; this is not an
-  error and should not be treated as a bug report when customers ask
-  about it.
-- Emergency security-driven deprecations (rare) can bypass the standard
-  6-month window with as little as 24 hours' notice; these are always
-  accompanied by a direct email to every affected account, not just a
-  changelog entry, given the shortened timeline.
+- Deprecated runtime versions and platform features get a minimum
+  6-month sunset notice, published on the changelog and emailed to
+  affected workspaces based on detected usage, before removal.
+- During the sunset window, deprecated runtimes continue to function
+  normally but return a `Deprecation` response header on deploy; this
+  is not an error and should not be treated as a bug report when
+  customers ask about it.
+- Emergency security-driven runtime deprecations (rare) can bypass the
+  standard 6-month window with as little as 24 hours' notice; these are
+  always accompanied by a direct email to every affected workspace, not
+  just a changelog entry, given the shortened timeline.
 
 Section 20: Support Channels & Response Hours
 - Email support is available 24/7 for all tiers with the response-time
   targets listed per-tier in Section 5; live chat is available during
-  business hours (9am-6pm in the customer's detected region) for
-  Business and Enterprise only.
-- Phone support is Enterprise-only, arranged through the named account
-  manager, and is not a channel Tier 2 can offer or schedule directly
-  for Business or lower tiers, even as a one-time exception.
+  business hours (9am-6pm in the customer's detected region) for Team
+  and Enterprise only.
+- Phone support is Enterprise-only, arranged through the named
+  solutions engineer, and is not a channel standard support can offer
+  or schedule directly for Team or lower tiers, even as a one-time
+  exception.
 - Community forum questions are not covered by any SLA and are answered
   on a best-effort basis by both staff and other customers; a forum
   post is never an acceptable substitute for a ticket when a customer
   needs a guaranteed response time.
 
-Section 21: Custom Domains & DNS Configuration
+Section 21: Custom Domains & DNS Configuration for HTTP Triggers
 - Custom domain verification requires either a TXT record or a CNAME,
-  customer's choice; propagation can take up to 24 hours, consistent
-  with the SSL provisioning delay noted in Section 8, and both delays
-  often get reported together as a single "my domain isn't working"
-  ticket.
-- Wildcard subdomain support is available on Business and Enterprise
-  only; Pro and Starter accounts can add individual subdomains but not
-  a wildcard record.
+  customer's choice; propagation can take up to 24 hours, which often
+  gets reported as a single "my domain isn't working" ticket alongside
+  unrelated function errors.
+- Wildcard subdomain support is available on Team and Enterprise only;
+  Starter accounts can add individual subdomains but not a wildcard
+  record; Hobby cannot use custom domains at all.
 - DNS changes made outside the platform's own DNS management (i.e., at
-  a third-party registrar) are outside Tier 2's visibility -- always
-  ask whether DNS is managed through Acme or externally before
+  a third-party registrar) are outside support's visibility -- always
+  ask whether DNS is managed through NimbusFn or externally before
   troubleshooting a domain issue.
 
 Section 22: Internal Escalation Etiquette
-- When escalating to engineering on-call, always include the account
-  ID, affected region, a timestamp in UTC, and the exact error message
-  or screenshot -- incomplete escalations are the single largest cause
-  of delayed P1 response per the quarterly incident retrospective.
+- When escalating to engineering on-call, always include the workspace
+  ID, function name, affected region, a timestamp in UTC, and the exact
+  error message or request ID -- incomplete escalations are the single
+  largest cause of delayed P1 response per the quarterly incident
+  retrospective.
 - Do not escalate a ticket twice through two different channels (e.g.,
   paging on-call AND opening an engineering Jira ticket) for the same
   issue; pick one path and note it in the ticket so on-call isn't
   duplicating triage effort.
 - If a customer explicitly asks to speak with an engineer directly,
-  explain that Tier 2 handles all first-line triage and engineering
-  engagement happens through escalation, not direct customer contact,
-  except for named Enterprise account managers who may loop in a
-  solutions engineer by design.
+  explain that standard support handles all first-line triage and
+  engineering engagement happens through escalation, not direct
+  customer contact, except for named Enterprise solutions engineers who
+  may loop in an engineer by design.
 
-Section 23: Third-Party Marketplace Add-Ons
-- The marketplace lists add-ons built by both Acme and approved third
-  parties; Acme-built add-ons carry the same support SLA as the core
-  platform, while third-party add-ons are supported by their own
-  publisher, not Tier 2 -- always check the publisher badge before
-  troubleshooting an add-on issue as if it were a platform bug.
-- Add-on billing is consolidated onto the customer's existing invoice
-  regardless of publisher, but refund requests for a third-party add-on
-  must be routed to that publisher's own support channel, listed on its
-  marketplace listing page, not handled through Acme billing.
-- Add-ons requesting elevated account permissions (beyond basic
-  read-only project access) go through a manual review before being
-  allowed into the marketplace; an add-on already listed there has
-  already cleared this review and should not be treated as suspicious
-  by default when a customer asks about it.
+Section 23: Marketplace Integrations & Templates
+- The template marketplace lists starter functions built by both
+  NimbusFn and approved third parties; NimbusFn-built templates carry
+  the same support SLA as the core platform, while third-party
+  templates are supported by their own publisher, not standard support
+  -- always check the publisher badge before troubleshooting a template
+  issue as if it were a platform bug.
+- Marketplace add-on billing is consolidated onto the customer's
+  existing invoice regardless of publisher, but refund requests for a
+  third-party add-on must be routed to that publisher's own support
+  channel, listed on its marketplace listing page, not handled through
+  NimbusFn billing.
+- Templates requesting elevated workspace permissions (beyond basic
+  deploy access) go through a manual review before being allowed into
+  the marketplace; a template already listed there has already cleared
+  this review and should not be treated as suspicious by default when a
+  customer asks about it.
 
 Section 24: Usage-Based Overage Billing
-- Business and Enterprise plans include a base resource allotment
-  (compute-hours and bandwidth); usage beyond the allotment is billed
-  at the published per-unit overage rate on the next invoice, not
-  blocked in real time, so a customer will not suddenly lose access
-  mid-month for going over.
-- Starter and Pro plans hard-cap at their listed resource allotment
-  instead of billing overages; exceeding the cap throttles the
-  account's compute rather than generating a surprise charge, and the
-  dashboard shows a clear "approaching limit" banner before this
-  happens.
-- Overage disputes follow the same 30-day window as the SLA credit
+- Team and Enterprise plans include a base invocation allotment; usage
+  beyond the allotment is billed at the published per-million-
+  invocation overage rate on the next invoice, not blocked in real
+  time, so a customer will not suddenly lose access mid-month for going
+  over.
+- Hobby and Starter plans hard-cap at their listed invocation allotment
+  instead of billing overages; exceeding the cap pauses new invocations
+  until the next billing cycle rather than generating a surprise
+  charge, and the dashboard shows a clear "approaching limit" banner
+  before this happens.
+- Overage disputes follow the same 21-day window as the SLA credit
   process in Section 17, and require the customer to point to the
   specific invoice line item in question rather than a general "this
   seems too high" claim, so the billing team has something concrete to
@@ -479,7 +503,7 @@ Section 25: Internal Documentation Change Log Practices
   contacts) requiring sign-off from the relevant department owner
   before publishing an update.
 - Minor wording clarifications do not require the full review cycle and
-  can be merged by any Tier 2 lead, but any change touching a number a
+  can be merged by any support lead, but any change touching a number a
   customer could rely on (a price, a percentage, an SLA hour count) is
   never treated as "minor," regardless of how small the change looks.
 - Agents who spot outdated or contradictory guidance in this document
@@ -522,12 +546,12 @@ def main():
     client = TonstClient(call_fn=lambda p: p)  # call_fn unused on this path
 
     parts = PromptParts(
-        system="You are a Tier 2 support agent for Acme Cloud Hosting. "
+        system="You are a developer support agent for NimbusFn. "
         "Answer using only the reference guide provided.",
         stable_blocks=[REFERENCE_DOC],
-        variable="A customer named Priya (priya.sharma@example.com) says "
-        "she was charged twice this month. In one sentence, what should "
-        "the agent check first?",
+        variable="A customer named Arjun (arjun.rao@example.com) says his "
+        "function's invocation count doubled overnight. In one sentence, "
+        "what should the agent check first?",
     )
 
     eligibility = gemini_provider.check_cache_eligibility(parts, model=MODEL)
@@ -578,7 +602,35 @@ def main():
             "together, per Google's own guidance) before concluding caching isn't "
             "active for this model/account. For a GUARANTEED cache, use Gemini's "
             "explicit CachedContent path instead -- see providers/gemini.py's "
-            "build_cached_content_resource() / build_generate_request_from_cache()."
+            "build_cached_content_resource() / build_generate_request_from_cache(), "
+            "or just run cache_savings_demo_gemini_explicit.py directly."
+        )
+
+    print("\n" + "=" * 60)
+    print("SUMMARY -- token & cost reduction, plainly stated")
+    print("=" * 60)
+    print(f"Tokens sent, call 1: {usage_1.input_tokens}")
+    print(f"Tokens sent, call 2: {usage_2.input_tokens}")
+    print(
+        "Token count change: "
+        f"{usage_1.input_tokens - usage_2.input_tokens:+d}  "
+        "(expected ~0 either way -- caching changes PRICE PER TOKEN, not "
+        "how many tokens are sent)"
+    )
+    print(f"Cost change, call 2 vs. an uncached call of the same size: {savings_2:+.1f}%")
+    if usage_2.cache_hit:
+        print(
+            f"\nIn plain terms: call 2 cost {abs(savings_2):.1f}% LESS than paying "
+            f"full price, because {usage_2.percent_of_input_from_cache}% of its "
+            "input was served from Gemini's implicit cache at a 90% discount."
+        )
+    else:
+        print(
+            "\nIn plain terms: 0% real savings this run -- implicit caching did "
+            "not activate on either call (a real, documented possible outcome, "
+            "not a bug). For savings you can rely on every time, use "
+            "cache_savings_demo_gemini_explicit.py's guaranteed explicit-cache "
+            "path instead."
         )
 
 
