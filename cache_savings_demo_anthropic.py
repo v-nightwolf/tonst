@@ -107,120 +107,122 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-sonnet-4-6"  # 1,024-token cache minimum -- see CACHE_MINIMUM_TOKENS
 
 # Deliberately long and repetitive-but-realistic: a support-org reference
-# doc, well past the 1,024-token minimum for MODEL above (~1,560 tokens
-# by tonst's chars/4 estimate -- confirmed against the real API on
-# 2026-09-09, which measured 1,547 input tokens for this exact stable
-# prefix -- giving comfortable margin over the minimum).
+# doc, well past the 1,024-token minimum for MODEL above (~1,440 tokens
+# by tonst's chars/4 estimate -- see cache_savings_demo_gemini.py's
+# REFERENCE_DOC comment for why that estimate runs a bit hot vs. the
+# real tokenizer; either way this clears the minimum with real margin).
+#
+# NOTE (Sept 2026): this is a fresh scenario -- a serverless-functions
+# platform's support reference guide -- swapped in for the original
+# "Acme Cloud Hosting" doc so a re-test isn't just replaying the exact
+# same cached text as before. Same structure and length class as the
+# original, different domain and wording throughout.
 REFERENCE_DOC = """
-Acme Cloud Hosting -- Tier 2 Support Reference Guide (Internal)
+NimbusFn -- Serverless Functions Platform, Developer Support Reference (Internal)
 
 Section 1: Account & Billing
-- Refunds are available within 30 days of the original charge for any
+- Refunds are available within 21 days of the original charge for any
   plan tier. Refunds outside this window require a manager override and
-  should be escalated to billing@acme-support.example.com with the
-  account ID and reason.
-- Failed payments trigger a 3-day grace period before service suspension.
-  During the grace period, customers retain full access and receive one
-  automated reminder email at day 1 and day 2.
+  should be escalated to billing@nimbusfn-support.example.com with the
+  workspace ID and reason.
+- Failed payments trigger a 5-day grace period before function
+  invocations are paused. During the grace period, deployments keep
+  running and the workspace owner receives one automated reminder email
+  at day 2 and day 4.
 - Plan downgrades take effect at the start of the next billing cycle;
   plan upgrades take effect immediately with a prorated charge.
-- Enterprise accounts (50+ seats) are billed annually via invoice, not
-  credit card, and go through the dedicated enterprise billing queue
-  rather than self-service refunds.
+- Team accounts (25+ members) are billed annually via invoice, not
+  credit card, and go through the dedicated team billing queue rather
+  than self-service refunds.
 
 Section 2: Technical Support Triage
-- P1 (full outage): page on-call immediately, acknowledge within 15
-  minutes, and post a status update every 30 minutes until resolved.
-- P2 (degraded service, workaround exists): acknowledge within 2 hours,
-  resolve or provide a workaround within 8 business hours.
-- P3 (cosmetic or low-impact issue): acknowledge within 1 business day,
-  no fixed resolution SLA but should not remain untriaged past a week.
-- Always confirm the customer's account ID and the affected region
-  before escalating -- most "outage" reports turn out to be a single
-  misconfigured DNS record or an expired API key, not a platform issue.
+- P1 (functions not invoking platform-wide): page on-call immediately,
+  acknowledge within 10 minutes, and post a status update every 20
+  minutes until resolved.
+- P2 (elevated cold-start latency or partial region outage): acknowledge
+  within 1 hour, resolve or provide a workaround within 6 business
+  hours.
+- P3 (dashboard cosmetic issue, non-blocking): acknowledge within 1
+  business day, no fixed resolution SLA but should not remain untriaged
+  past a week.
+- Always confirm the workspace ID, function name, and affected region
+  before escalating -- most "my function isn't running" reports turn
+  out to be an unhandled exception in the customer's own code, not a
+  platform issue.
 
 Section 3: Common Customer Questions
-- "Why was I charged twice?" -- almost always a plan change mid-cycle
-  generating a prorated charge alongside the regular renewal. Check the
-  invoice line items before assuming a billing error.
-- "My site is down" -- check the status page first, then ask for the
-  exact URL and error message; "down" covers everything from a full
-  outage to a single broken image link.
-- "Can I get a discount?" -- Tier 2 support cannot offer discretionary
+- "Why did my invocation count double?" -- almost always a retry policy
+  configured on the trigger (queue or webhook) re-invoking after a
+  timeout. Check the function's retry settings before assuming a
+  billing error.
+- "My function is timing out" -- check the configured timeout limit
+  first, then ask for the exact function name and a request ID; a
+  timeout can mean anything from a genuine slow dependency to a
+  misconfigured 3-second limit on a function that needs 10.
+- "Can I get a discount?" -- support cannot offer discretionary
   discounts. Route to the account management team for anything beyond
   the standard published pricing.
-- "How do I delete my account?" -- confirm no active subscriptions
-  first, then follow the account-closure checklist in the internal wiki;
-  never delete an account directly from a support ticket.
+- "How do I delete my workspace?" -- confirm no active scheduled
+  functions or paid add-ons first, then follow the workspace-closure
+  checklist in the internal wiki; never delete a workspace directly
+  from a support ticket.
 
 Section 4: Escalation Contacts
-- Billing disputes: billing@acme-support.example.com
-- Security incidents: security@acme-support.example.com (P1 always,
+- Billing disputes: billing@nimbusfn-support.example.com
+- Security incidents: security@nimbusfn-support.example.com (P1 always,
   regardless of apparent severity)
-- Enterprise account management: enterprise@acme-support.example.com
+- Team account management: teams@nimbusfn-support.example.com
 
 Section 5: Plan Tiers & Feature Matrix
-- Starter ($0/mo): 1 project, community support only, 99.5% uptime SLA,
-  shared compute, 5GB storage, no custom domains.
-- Pro ($29/mo): 10 projects, email support (next business day), 99.9%
-  uptime SLA, dedicated compute pool, 100GB storage, 3 custom domains,
-  daily automated backups retained for 7 days.
-- Business ($99/mo): unlimited projects, priority email + chat support
-  (4-hour response), 99.95% uptime SLA, dedicated compute, 1TB storage,
-  unlimited custom domains, backups retained for 30 days, staging
-  environments, SSO via SAML.
-- Enterprise (custom pricing, annual invoice): everything in Business
-  plus a named account manager, custom SLA negotiation, dedicated
-  infrastructure, backups retained for 1 year, audit logging, and a
-  private Slack channel with the support team.
+- Hobby ($0/mo): 1 workspace, community support only, 500K invocations
+  included, shared compute, 128MB max memory per function, no custom
+  domains for HTTP triggers.
+- Starter ($19/mo): 5 workspaces, email support (next business day), 5M
+  invocations included, dedicated compute pool, 512MB max memory, 3
+  custom domains, deployment history retained for 7 days.
+- Team ($79/mo): unlimited workspaces, priority email + chat support
+  (4-hour response), 50M invocations included, 1GB max memory,
+  unlimited custom domains, deployment history retained for 30 days,
+  staging environments, SSO via SAML.
+- Enterprise (custom pricing, annual invoice): everything in Team plus a
+  named solutions engineer, custom SLA negotiation, dedicated
+  infrastructure, deployment history retained for 1 year, audit
+  logging, and a private Slack channel with the support team.
 - Feature availability questions from customers should always be
   answered against the current published pricing page, not from memory
   -- the matrix above is reviewed quarterly and can lag a recent change.
 
 Section 6: Outage Communication Protocol
 - Every P1 incident gets a public status-page entry within 15 minutes
-  of confirmation, regardless of how few customers appear affected.
-- Status updates during an active P1 go out every 30 minutes on a fixed
+  of confirmation, regardless of how few workspaces appear affected.
+- Status updates during an active P1 go out every 20 minutes on a fixed
   cadence, even if the update is just "still investigating, next update
-  in 30 minutes" -- silence during an outage erodes trust faster than a
+  in 20 minutes" -- silence during an outage erodes trust faster than a
   slow-but-communicative resolution.
 - Once resolved, a P1 always gets a post-incident summary within 24
   hours: what happened, customer impact, and what's changing to prevent
   recurrence. This is drafted by the on-call engineer and reviewed by
   the support lead before publishing.
 - P2 and P3 issues are not posted to the public status page unless they
-  affect a large enough customer segment that multiple independent
+  affect a large enough share of workspaces that multiple independent
   tickets are expected; use judgment and escalate to the support lead
   if unsure whether an issue crosses that line.
 
-Section 7: Data Retention & Account Closure
-- Active account data is retained indefinitely while the subscription
-  is active, subject to the plan's own backup retention window listed
-  in Section 5.
-- On voluntary account closure, project data is retained for 30 days
-  in a recoverable state before permanent deletion, to cover accidental
-  cancellations. Customers are told this explicitly during the closure
-  flow.
+Section 7: Data Retention & Workspace Closure
+- Active workspace logs are retained for 30 days on Hobby/Starter and 90
+  days on Team/Enterprise while the subscription is active, subject to
+  the plan's own deployment-history window listed in Section 5.
+- On voluntary workspace closure, function code and configuration are
+  retained for 14 days in a recoverable state before permanent
+  deletion, to cover accidental cancellations. Customers are told this
+  explicitly during the closure flow.
 - On involuntary closure (repeated failed payment beyond the grace
-  period in Section 1), the same 30-day recoverable window applies
+  period in Section 1), the same 14-day recoverable window applies
   before permanent deletion, and a reactivation link is included in
   every suspension notice email.
 - Enterprise accounts under contract have their own data-retention
   terms specified in the master service agreement; check the contract
-  before applying the default 30-day window to an enterprise closure.
-
-Section 8: Known Limitations (do not promise fixes on these)
-- Custom domain SSL certificates can take up to 24 hours to provision
-  after DNS is correctly pointed -- this is a known, expected delay, not
-  a bug, and should be communicated as such rather than escalated.
-- The platform does not currently support multi-region failover for
-  Starter or Pro tiers; only Business and Enterprise get automatic
-  regional failover. This is a known gap on the roadmap, not something
-  support can work around per-customer.
-- Bulk CSV import is capped at 50,000 rows per file; larger imports
-  need to be split client-side. This limit is intentional (protects
-  shared compute on lower tiers) and is not adjustable per-account
-  except for Enterprise, where it's a contract term.
+  before applying the default 14-day window to an enterprise closure.
 """.strip()
 
 
@@ -259,12 +261,12 @@ def main():
     client = TonstClient(call_fn=lambda p: p)  # call_fn unused on this path
 
     parts = PromptParts(
-        system="You are a Tier 2 support agent for Acme Cloud Hosting. "
+        system="You are a developer support agent for NimbusFn. "
         "Answer using only the reference guide provided.",
         stable_blocks=[REFERENCE_DOC],
-        variable="A customer named Priya (priya.sharma@example.com) says "
-        "she was charged twice this month. In one sentence, what should "
-        "the agent check first?",
+        variable="A customer named Arjun (arjun.rao@example.com) says his "
+        "function's invocation count doubled overnight. In one sentence, "
+        "what should the agent check first?",
     )
 
     eligibility = check_cache_eligibility(parts, model=MODEL)
@@ -334,6 +336,38 @@ def main():
             "calls, the stable prefix wasn't actually byte-identical, or this "
             "model/account doesn't have caching enabled -- worth checking "
             "before trusting the caching feature to save anything in production."
+        )
+
+    print("\n" + "=" * 60)
+    print("SUMMARY -- token & cost reduction, plainly stated")
+    print("=" * 60)
+    tokens_call1 = usage_1.input_tokens + usage_1.cache_creation_input_tokens
+    tokens_call2 = usage_2.input_tokens + usage_2.cache_read_input_tokens
+    print(f"Tokens sent, call 1 (cache write):  {tokens_call1}")
+    print(f"Tokens sent, call 2 (cache read):    {tokens_call2}")
+    token_delta = tokens_call1 - tokens_call2
+    print(
+        f"Token count change: {token_delta:+d}  "
+        "(expected to be ~0 -- caching changes PRICE PER TOKEN, not how many "
+        "tokens are sent; token count is not what this mechanism reduces)"
+    )
+    print(f"Cost change, call 1 vs. an uncached call of the same size:  {savings_1:+.1f}%")
+    print(f"Cost change, call 2 vs. an uncached call of the same size:  {savings_2:+.1f}%")
+    if usage_2.cache_hit:
+        print(
+            f"\nIn plain terms: call 2 cost {abs(savings_2):.1f}% LESS than paying "
+            f"full price for the same {tokens_call2} tokens, because "
+            f"{usage_2.percent_of_input_from_cache}% of its input was served from "
+            "cache at Anthropic's confirmed 90% cache-read discount. Call 1 cost "
+            f"{abs(savings_1):.1f}% MORE than full price -- that's the one-time "
+            "cache-write premium, paid once per TTL window, not on every call."
+        )
+    else:
+        print(
+            "\nIn plain terms: no cache hit occurred on call 2, so neither call "
+            "saved any money this run (0% real savings) -- see the Verdict above "
+            "for the likely reason, and re-run to confirm before concluding "
+            "caching doesn't work for this account."
         )
 
 
