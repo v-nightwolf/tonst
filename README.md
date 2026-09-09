@@ -37,6 +37,24 @@ of dropping it outright — see "History compaction" below.
 
 ## Real results (not simulated)
 
+tonst saves money two independent ways, both measured against real
+provider APIs, not simulated:
+
+| Mechanism | Real measured saving | Applies |
+|---|---|---|
+| **Prompt-caching** (a reused stable prefix — docs, system prompts, tool defs) | up to **89.6%** cheaper per cached read (Gemini, explicit); **87.8%** on Anthropic | From the 2nd call onward with an unchanged prefix — the 1st call costs slightly *more* (a cache-write premium); 0% wherever caching never activates (e.g. Gemini's best-effort implicit path, or a free-tier key) |
+| **Mechanical trimming** (dedup, whitespace, redundant history — every request) | up to **26.9%** fewer tokens and cost, in this real test | Scales with how much redundancy is actually in the prompt — 0% on an already-clean one |
+
+These are two different mechanisms, not one number to add together —
+see "Prompt-caching structuring" and "Testing against a real provider"
+below for the full per-provider breakdowns, exact conditions, and
+honest caveats (what's best-effort, what needs billing enabled, what
+doesn't apply on the first call). The rest of this section is the full
+detail behind the trimming row above; the caching row's full detail
+lives in "Testing against a real provider" further down.
+
+### Mechanical trimming, in detail
+
 Tested against the actual `api.anthropic.com` endpoint on 2026-09-05, using
 a realistic support-chat prompt with duplicated system instructions and
 embedded PII (`claude-sonnet-4-6`, the model `real_api_demo.py` targets):
@@ -62,16 +80,15 @@ with any duplication, verbose history, or repeated instructions (the
 overwhelming majority of real chat-app traffic) see meaningful reduction;
 a single already-minimal prompt does not, and shouldn't.
 
-**Why cost tracks tokens 1:1 here, unlike the prompt-caching results
-further down**: this test measures plain trimming — literally sending
-fewer tokens at the same standard price, no discount or premium
-multiplier involved. That's a meaningfully different mechanism from
-prompt caching (see "Prompt-caching structuring" and "Testing against
-a real provider" below), where token count never drops and the entire saving comes from
-a *cheaper price per token* on a cache hit instead. Both are real cost
-reductions; they just come from different places, and tonst reports
-both correctly rather than treating "tokens saved" as a universal proxy
-for "money saved."
+**Why cost tracks tokens 1:1 here, unlike prompt-caching**: this test
+measures plain trimming — literally sending fewer tokens at the same
+standard price, no discount or premium multiplier involved. Prompt
+caching is a meaningfully different mechanism (see "Prompt-caching
+structuring" and "Testing against a real provider" below), where token
+count never drops and the entire saving comes from a *cheaper price per
+token* on a cache hit instead. Both are real cost reductions; they just
+come from different places, and tonst reports both correctly rather
+than treating "tokens saved" as a universal proxy for "money saved."
 
 At real traffic volumes the fractions of a cent above add up: an app
 sending 100,000 requests/day with this same 50-token, 26.9% overhead
