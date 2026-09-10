@@ -32,12 +32,26 @@ out on an extra optimization. Callers should know that.
 """
 
 from __future__ import annotations
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import requests
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
+
+# Diagnostic only -- never affects behavior. See redact_llm.py's matching
+# comment: enable with logging.getLogger("tonst.compactor").setLevel(
+# logging.DEBUG) to see per-call elapsed time and the specific failure
+# mode, rather than every failure collapsing into "fell back to plain
+# truncation."
+logger = logging.getLogger(__name__)
+
+# One shared connection pool instead of a fresh TCP/HTTP handshake per
+# call. Real, if modest, latency savings -- will not by itself explain a
+# multi-second timeout.
+_SESSION = requests.Session()
 
 # Deliberately narrow: summarize only, never answer/continue. Asking for
 # specific categories (task/goal, decisions, entities) rather than "just
@@ -55,15 +69,30 @@ COMPACTION_PROMPT = (
 
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
+    t0 = time.perf_counter()
     try:
-        resp = requests.post(
+        resp = _SESSION.post(
             DEFAULT_OLLAMA_URL,
             json={"model": model, "prompt": prompt, "stream": False},
             timeout=timeout,
         )
         resp.raise_for_status()
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.debug("compactor ollama call ok model=%s elapsed_ms=%.1f", model, elapsed_ms)
         return resp.json().get("response", "")
-    except requests.RequestException:
+    except requests.exceptions.Timeout:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "compactor ollama call TIMED OUT model=%s configured_timeout=%.1fs elapsed_ms=%.1f",
+            model, timeout, elapsed_ms,
+        )
+        return None
+    except requests.RequestException as exc:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "compactor ollama call FAILED model=%s elapsed_ms=%.1f error=%s: %s",
+            model, elapsed_ms, type(exc).__name__, exc,
+        )
         return None
 
 
@@ -82,7 +111,7 @@ class HistoryCompactor:
 
     def is_available(self) -> bool:
         try:
-            resp = requests.get(self.ollama_url.replace("/api/generate", "/api/tags"), timeout=1.5)
+            resp = _SESSION.get(self.ollama_url.replace("/api/generate", "/api/tags"), timeout=1.5)
             return resp.status_code == 200
         except requests.RequestException:
             return False

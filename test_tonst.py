@@ -144,6 +144,125 @@ def test_llm_redact_fails_soft_when_model_unavailable():
 
 
 # ---------------------------------------------------------------------
+# redact_llm.py -- realistic small-model output quirks (found via
+# offline fixture testing, Sept 2026, after a real GPU benchmark showed
+# use_enhanced_redaction catching zero free-text fields across 360
+# calls; see ROADMAP.md / colab-benchmark-findings.md). These are
+# independent of that benchmark's timeout issue -- they cover cases
+# where the model DID respond, but the old parser/guard rail would have
+# silently discarded a real, present span anyway.
+# ---------------------------------------------------------------------
+
+def test_llm_redact_handles_markdown_fenced_json():
+    text = "Please review this for Priya Malhotra."
+
+    def fake_model(prompt, model, timeout):
+        return '```json\n[{"text": "Priya Malhotra", "type": "NAME"}]\n```'
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Priya Malhotra" not in result.redacted_text
+
+
+def test_llm_redact_handles_array_wrapped_in_object():
+    text = "Please review this for Priya Malhotra."
+
+    def fake_model(prompt, model, timeout):
+        # Small models sometimes wrap the array in an object despite
+        # being told to return a bare array.
+        return '{"entities": [{"text": "Priya Malhotra", "type": "NAME"}]}'
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Priya Malhotra" not in result.redacted_text
+
+
+def test_llm_redact_ignores_unrelated_bracket_before_real_array():
+    text = "Please review this for Priya Malhotra."
+
+    def fake_model(prompt, model, timeout):
+        # An earlier, unrelated bracket pair (e.g. the model echoing
+        # part of its own instructions) used to make a greedy regex
+        # merge everything up to the LAST ']' into one unparseable blob,
+        # silently discarding a real array that followed it.
+        return 'The format is [name, employer]. Result: [{"text": "Priya Malhotra", "type": "NAME"}]'
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Priya Malhotra" not in result.redacted_text
+
+
+def test_llm_redact_handles_python_literal_style_single_quotes():
+    text = "Please review this for Priya Malhotra."
+
+    def fake_model(prompt, model, timeout):
+        # Not strict JSON (single-quoted strings) -- a real quirk of
+        # models trained on a lot of Python code.
+        return "[{'text': 'Priya Malhotra', 'type': 'NAME'}]"
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Priya Malhotra" not in result.redacted_text
+
+
+def test_llm_redact_case_insensitive_fallback_uses_source_casing():
+    text = "Please review this for Priya Malhotra."
+
+    def fake_model(prompt, model, timeout):
+        # The model normalizes casing despite being told to return the
+        # exact substring -- a real, common small-model quirk.
+        return '[{"text": "priya malhotra", "type": "NAME"}]'
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Priya Malhotra" not in result.redacted_text
+    # The placeholder must be derived from the SOURCE text's actual
+    # casing, not the model's re-cased version, both so nothing not
+    # really present gets introduced and so the same source text always
+    # redacts to the same placeholder regardless of what casing the
+    # model happens to emit on a given run (required for
+    # cache_structuring.py's stable blocks to stay byte-identical).
+    assert "Priya Malhotra" in result.mapping.values()
+    assert "priya malhotra" not in result.mapping.values()
+
+
+def test_llm_redact_case_insensitive_fallback_does_not_defeat_hallucination_guard():
+    text = "Please review this for Priya Malhotra."
+
+    def fake_model(prompt, model, timeout):
+        # A span that is genuinely absent (in any casing) must still be
+        # rejected -- the case-insensitive fallback must never widen the
+        # guard rail into accepting hallucinated spans.
+        return '[{"text": "Someone Not In The Text At All", "type": "NAME"}]'
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Someone Not In The Text At All" not in result.mapping.values()
+    assert result.mapping == {}
+
+
+def test_llm_redact_handles_bare_object_with_no_array_wrapper():
+    """
+    Confirmed against a REAL (not simulated) local Ollama run with
+    llama3.2:1b, Sept 2026: despite the prompt saying "Respond with
+    ONLY a JSON array. Each item: {...}", the model returned just
+    '{"text": "Arjun", "type": "NAME"}' for its one match -- no `[` `]`
+    anywhere. This was silently dropped to zero entities before this
+    fix, since the old (and the array-only) extractor only ever looked
+    for `[...]` spans.
+    """
+    text = "Hi, my name is Arjun and I work at NimbusFn."
+
+    def fake_model(prompt, model, timeout):
+        return '{"text": "Arjun", "type": "NAME"}'
+
+    redactor = LLMRedactor(model_call_fn=fake_model)
+    result = redact_with_llm(text, redactor)
+    assert "Arjun" not in result.redacted_text
+    assert "Arjun" in result.mapping.values()
+
+
+# ---------------------------------------------------------------------
 # trim.py -- mechanical token reduction
 # ---------------------------------------------------------------------
 

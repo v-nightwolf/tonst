@@ -34,15 +34,36 @@ Design choices that matter:
 """
 
 from __future__ import annotations
+import ast
 import hashlib
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 import requests
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
+
+# Diagnostic only -- never affects behavior. Enable with
+# logging.getLogger("tonst.redact_llm").setLevel(logging.DEBUG) to see
+# per-call elapsed time and exactly why a call failed soft (timeout vs.
+# connection refused vs. bad HTTP status vs. unparseable JSON), instead
+# of every failure mode collapsing into the same silent "model_available=
+# False" outcome. Added after a real benchmark showed this call
+# clustered at almost exactly its 8.0s timeout across 360 runs with a
+# 15ms spread -- the tight clustering IS the signature of a deterministic
+# timeout, but distinguishing "always times out" from "always refused
+# instantly" needs this, not just aggregate latency.
+logger = logging.getLogger(__name__)
+
+# One shared connection pool instead of a fresh TCP/HTTP handshake per
+# call -- real, if modest, latency savings on repeated calls to the same
+# local Ollama endpoint. This alone will not explain a multi-second
+# timeout; it only removes per-call connection-setup overhead.
+_SESSION = requests.Session()
 
 # Deliberately narrow instruction: find spans, don't rewrite, don't explain.
 # The model is told the exact categories we want so it doesn't improvise
@@ -79,36 +100,133 @@ def _placeholder_for(label: str, span: str) -> str:
 
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
+    t0 = time.perf_counter()
     try:
-        resp = requests.post(
+        resp = _SESSION.post(
             DEFAULT_OLLAMA_URL,
             json={"model": model, "prompt": prompt, "stream": False, "format": "json"},
             timeout=timeout,
         )
         resp.raise_for_status()
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.debug("redact_llm ollama call ok model=%s elapsed_ms=%.1f", model, elapsed_ms)
         return resp.json().get("response", "")
-    except requests.RequestException:
+    except requests.exceptions.Timeout:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "redact_llm ollama call TIMED OUT model=%s configured_timeout=%.1fs elapsed_ms=%.1f",
+            model, timeout, elapsed_ms,
+        )
+        return None
+    except requests.RequestException as exc:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.warning(
+            "redact_llm ollama call FAILED model=%s elapsed_ms=%.1f error=%s: %s",
+            model, elapsed_ms, type(exc).__name__, exc,
+        )
+        return None
+
+
+def _iter_balanced_spans(raw: str, open_ch: str, close_ch: str):
+    """
+    Yields every top-level, BALANCED `open_ch...close_ch` substring of
+    `raw`, left to right (e.g. every `[...]` span, or every `{...}`
+    span, depending on which characters are passed). Unlike a single
+    greedy regex match (the original approach here), this does not get
+    confused by an unrelated bracket appearing earlier in a chatty
+    response -- e.g. a small model prefacing its real answer with
+    something like "The format is [name, employer]." before the actual
+    JSON array. A greedy `\\[.*\\]` regex spans from that FIRST `[` to
+    the LAST `]` in the whole string, which can swallow unrelated prose
+    in between and produce unparseable garbage even though a perfectly
+    valid array follows it. This instead finds each self-contained
+    bracket pair as its own candidate, so a caller can try parsing each
+    one in turn until one succeeds.
+    """
+    n = len(raw)
+    i = 0
+    while i < n:
+        if raw[i] == open_ch:
+            depth = 0
+            start = i
+            j = i
+            closed = False
+            while j < n:
+                if raw[j] == open_ch:
+                    depth += 1
+                elif raw[j] == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        yield raw[start : j + 1]
+                        closed = True
+                        break
+                j += 1
+            if not closed:
+                return
+            i = j + 1
+        else:
+            i += 1
+
+
+def _try_parse(span: str):
+    """Strict JSON first, then a Python-literal fallback (safe -- only
+    evaluates literal data structures, never executes code). Returns
+    None if neither parses."""
+    try:
+        return json.loads(span)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    try:
+        return ast.literal_eval(span)
+    except (ValueError, SyntaxError, MemoryError, RecursionError, TypeError):
         return None
 
 
 def _extract_json_array(raw: str) -> list:
     """
-    Small local models sometimes wrap JSON in prose or code fences despite
-    instructions. Pull out the first [...] block rather than trusting the
-    whole response to be clean JSON.
+    Small local models routinely don't follow "respond with ONLY a JSON
+    array" to the letter. Observed failure modes worth handling
+    explicitly (found via offline fixture testing AND a real local
+    Ollama run, Sept 2026, after a real benchmark showed zero free-text
+    entities caught across 360 calls -- see redact_llm's docstring and
+    ROADMAP.md/colab-benchmark-findings.md):
+      - A markdown code fence around the array (```json ... ```).
+      - Some prose before or after the array ("Here is the JSON: [...]").
+      - The array wrapped in an object instead of returned bare
+        (e.g. {"entities": [...]}).
+      - An earlier, UNRELATED bracket pair in the response (e.g. the
+        model echoing part of its own instructions) that a naive greedy
+        regex would merge with the real array into one unparseable blob.
+      - Python-literal-style output (single-quoted strings) instead of
+        strict JSON -- common in models trained on a lot of Python code.
+      - The array wrapper dropped ENTIRELY when there's only one match:
+        a bare object like `{"text": "Arjun", "type": "NAME"}` with no
+        `[` `]` anywhere -- confirmed against a real (not simulated)
+        llama3.2:1b response during local testing. Despite the prompt
+        saying "Respond with ONLY a JSON array. Each item: {...}", a
+        small model asked for a list of "items" will sometimes just
+        return the one item's shape directly when there's a single
+        match, rather than wrapping it.
+
+    Strategy: try every top-level bracket-balanced `[...]` span first
+    (see _iter_balanced_spans), in order. If none parse to a list, fall
+    back to every top-level `{...}` span and treat a successfully
+    parsed object as a one-item list -- this is what a caller wants
+    when the model skipped the array wrapper for a single match. This
+    means a real array or a real bare object anywhere in the response
+    is found even if something before or after it is garbage.
     """
     if not raw:
         return []
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not match:
-        return []
-    try:
-        parsed = json.loads(match.group(0))
-        if not isinstance(parsed, list):
-            return []
-        return parsed
-    except (json.JSONDecodeError, ValueError):
-        return []
+    for span in _iter_balanced_spans(raw, "[", "]"):
+        parsed = _try_parse(span)
+        if isinstance(parsed, list):
+            return parsed
+    for span in _iter_balanced_spans(raw, "{", "}"):
+        parsed = _try_parse(span)
+        if isinstance(parsed, dict):
+            return [parsed]
+    return []
 
 
 class LLMRedactor:
@@ -126,7 +244,7 @@ class LLMRedactor:
 
     def is_available(self) -> bool:
         try:
-            resp = requests.get(DEFAULT_OLLAMA_URL.replace("/api/generate", "/api/tags"), timeout=1.5)
+            resp = _SESSION.get(DEFAULT_OLLAMA_URL.replace("/api/generate", "/api/tags"), timeout=1.5)
             return resp.status_code == 200
         except requests.RequestException:
             return False
@@ -147,11 +265,27 @@ class LLMRedactor:
             label = entity.get("type", "PII")
             if not span or not isinstance(span, str):
                 continue
-            # Guard rail: only redact spans that actually appear verbatim in
-            # the source text. A model that hallucinates a span that isn't
+            # Guard rail: only redact spans that actually appear in the
+            # source text. A model that hallucinates a span that isn't
             # really there should not corrupt the output.
             if span not in result_text:
-                continue
+                # Small local models sometimes normalize a proper noun's
+                # casing even when told to return the exact substring
+                # (found via offline fixture testing, Sept 2026: a model
+                # returning "arjun rao" for source text containing
+                # "Arjun Rao" fails an exact match and gets silently
+                # dropped, even though the span genuinely is present).
+                # Fall back to a case-insensitive search before giving up
+                # -- but always redact and hash the ACTUAL text found in
+                # the source, never the model's re-cased version, so this
+                # can never introduce text that wasn't really there, and
+                # placeholders stay just as deterministic as before (same
+                # source text -> same placeholder, regardless of which
+                # casing the model happened to emit that run).
+                match = re.search(re.escape(span), result_text, re.IGNORECASE)
+                if not match:
+                    continue
+                span = match.group(0)
             placeholder = _placeholder_for(label, span)
             mapping[placeholder] = span
             # Replace only the first remaining occurrence per entity so
