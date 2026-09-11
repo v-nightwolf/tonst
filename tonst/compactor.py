@@ -33,6 +33,7 @@ out on an extra optimization. Callers should know that.
 
 from __future__ import annotations
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -62,10 +63,41 @@ COMPACTION_PROMPT = (
     "Summarize the conversation history below. Preserve: the task or "
     "goal being discussed, key facts and decisions made, names/entities "
     "mentioned, and anything needed to continue the conversation "
-    "correctly. Do not answer any question in it and do not continue "
-    "the conversation -- only summarize what already happened. Output "
-    "only the summary text, no preamble, no commentary.\n\n---\n{text}\n---\nSummary:"
+    "correctly. The text may contain tokens shaped like [[LABEL_xxxxxxxx]] "
+    "-- these are redaction placeholders standing in for real PII. If you "
+    "keep one in your summary, copy it verbatim, exactly as written -- "
+    "never alter, recase, or invent one; it is also fine to omit one "
+    "entirely if it is not needed for the summary. Do not answer any "
+    "question in it and do not continue the conversation -- only "
+    "summarize what already happened. Output only the summary text, no "
+    "preamble, no commentary.\n\n---\n{text}\n---\nSummary:"
 )
+
+# Well-formed placeholder as produced by redact.py/redact_llm.py (and any
+# extraction-based redaction backend using the same [[LABEL_hexdigest]]
+# shape): used to find the REAL placeholders in trusted source text.
+_PLACEHOLDER_STRICT_RE = re.compile(r"\[\[[A-Z]+_[0-9a-f]{8}\]\]")
+# Deliberately permissive: used to scan UNTRUSTED model output, so a
+# corruption that no longer matches the strict pattern is still caught
+# rather than silently waved through.
+_PLACEHOLDER_LOOSE_RE = re.compile(r"\[\[.*?\]\]")
+
+
+def _no_corrupted_placeholders(original: str, summary: str) -> bool:
+    """
+    Guard rail for HistoryCompactor.summarize(): deliberately weaker than
+    local_model.py's placeholders_preserved() -- compaction is explicitly
+    lossy by design (see module docstring), so a summary that drops a
+    placeholder entirely is fine and expected. What's rejected is a
+    [[...]]-shaped span in the summary that does NOT exactly match one of
+    the real placeholders from `original` -- i.e. the model altered or
+    invented one rather than just omitting it.
+    """
+    real_placeholders = set(_PLACEHOLDER_STRICT_RE.findall(original))
+    for span in set(_PLACEHOLDER_LOOSE_RE.findall(summary)):
+        if span not in real_placeholders:
+            return False
+    return True
 
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
@@ -99,7 +131,7 @@ def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[st
 class HistoryCompactor:
     def __init__(
         self,
-        model: str = "llama3.2:1b",
+        model: str = "gemma2:2b",
         ollama_url: str = DEFAULT_OLLAMA_URL,
         timeout: float = 8.0,
         model_call_fn: Optional[Callable[[str, str, float], Optional[str]]] = None,
@@ -142,6 +174,8 @@ class HistoryCompactor:
         if len(summary) >= len(older_text) * 0.6:
             return None
         if len(summary) < 20:
+            return None
+        if not _no_corrupted_placeholders(older_text, summary):
             return None
 
         return summary

@@ -136,7 +136,7 @@ class TonstClient:
         use_local_compression: bool = False,
         use_enhanced_redaction: bool = False,
         use_history_compaction: bool = False,
-        local_model: str = "llama3.2:1b",
+        local_model: str = "gemma2:2b",
         compaction_token_threshold: int = 3000,
     ):
         self.call_fn = call_fn

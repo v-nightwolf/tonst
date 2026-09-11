@@ -75,6 +75,11 @@ home/mailing addresses, employer or company names when tied to a specific \
 person, and specific project codenames. Do NOT flag emails, phone numbers, \
 or card numbers -- those are handled separately.
 
+The text may already contain tokens shaped like [[LABEL_xxxxxxxx]] -- these \
+are placeholders from an earlier redaction pass, not real text. Completely \
+ignore them: never include one in your output, never treat it as PII, and \
+never copy it (with or without surrounding words) into a "text" field.
+
 Respond with ONLY a JSON array, nothing else. Each item: {{"text": "<exact \
 substring from the input>", "type": "<NAME|ADDRESS|EMPLOYER|CODENAME>"}}. \
 If nothing is found, respond with [].
@@ -84,6 +89,13 @@ Text:
 {text}
 ---
 JSON:"""
+
+# Schema enforcement for the guard rail below -- the ONLY types this
+# prompt ever asks for. A model response using anything else is either
+# hallucinating a category or (found directly, 2026-09-11, gemma2:2b)
+# re-flagging an ALREADY-REDACTED placeholder from the regex pass using
+# an invented type like EMAIL/PHONE/SSN_LIKE/CREDIT_CARD/IP_ADDRESS.
+ALLOWED_ENTITY_TYPES = {"NAME", "ADDRESS", "EMPLOYER", "CODENAME"}
 
 
 @dataclass
@@ -104,7 +116,7 @@ def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[st
     try:
         resp = _SESSION.post(
             DEFAULT_OLLAMA_URL,
-            json={"model": model, "prompt": prompt, "stream": False, "format": "json"},
+            json={"model": model, "prompt": prompt, "stream": False, "options": {"num_predict": 300}},
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -232,7 +244,7 @@ def _extract_json_array(raw: str) -> list:
 class LLMRedactor:
     def __init__(
         self,
-        model: str = "llama3.2:1b",
+        model: str = "gemma2:2b",
         timeout: float = 8.0,
         model_call_fn: Optional[Callable[[str, str, float], Optional[str]]] = None,
     ):
@@ -264,6 +276,29 @@ class LLMRedactor:
             span = entity.get("text")
             label = entity.get("type", "PII")
             if not span or not isinstance(span, str):
+                continue
+            # Guard rail: reject anything outside the schema we actually
+            # asked for. Root cause found 2026-09-11 (gemma2:2b, live
+            # benchmark): redact_with_llm() runs regex redaction FIRST
+            # (see redact.py), so this model is shown text that already
+            # contains [[LABEL_hex]] placeholders -- and a chattier
+            # model can "helpfully" re-report an existing placeholder as
+            # its own entity, using an invented type never in the
+            # allowed list. Rejecting anything outside the schema stops
+            # that at the source rather than downstream.
+            if not isinstance(label, str) or label.upper() not in ALLOWED_ENTITY_TYPES:
+                continue
+            # Guard rail: a genuine free-text PII span from the user's
+            # own input never legitimately contains "[[" -- if the
+            # model's "text" field does, it's quoting (or gluing words
+            # onto) an ALREADY-REDACTED token from the earlier regex
+            # pass, not real text. Left unchecked this wraps an existing
+            # placeholder inside a brand-new one (mapping[new] = "[[OLD_
+            # hex]]" instead of the real value), and restore_placeholders()
+            # can leak the orphaned inner placeholder verbatim into the
+            # final response -- this is the single check that would have
+            # caught every corruption case found in the investigation.
+            if "[[" in span:
                 continue
             # Guard rail: only redact spans that actually appear in the
             # source text. A model that hallucinates a span that isn't

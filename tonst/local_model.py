@@ -18,6 +18,7 @@ optional local model wasn't available.
 
 from __future__ import annotations
 import logging
+import re
 import time
 
 import requests
@@ -39,12 +40,52 @@ _SESSION = requests.Session()
 COMPRESSION_INSTRUCTION = (
     "Rewrite the following text to be as short as possible while preserving "
     "every fact, instruction, and constraint. Do not add commentary. "
+    "The text may contain tokens shaped like [[LABEL_xxxxxxxx]] -- these are "
+    "redaction placeholders standing in for real PII. Copy every one of them "
+    "verbatim, exactly as written, character for character. Never alter, "
+    "recase, or invent one. "
     "Output only the rewritten text.\n\n---\n{text}"
 )
 
+# Well-formed placeholder as produced by redact.py/redact_llm.py (and any
+# extraction-based redaction backend using the same [[LABEL_hexdigest]]
+# shape): used to find the REAL placeholders in trusted source text.
+_PLACEHOLDER_STRICT_RE = re.compile(r"\[\[[A-Z]+_[0-9a-f]{8}\]\]")
+# Deliberately permissive: used to scan UNTRUSTED model output. A
+# corruption (e.g. a re-cased hex digest) no longer matches the strict
+# pattern above -- scanning output with the strict pattern would let a
+# corrupted span sail through un-flagged because it no longer "looks
+# like" a placeholder to the strict regex. Any double-bracket span,
+# well-formed or not, is a candidate that must exactly match a real one.
+_PLACEHOLDER_LOOSE_RE = re.compile(r"\[\[.*?\]\]")
+
+
+def placeholders_preserved(original: str, rewritten: str) -> bool:
+    """
+    Guard rail for LocalCompressor.compress(): compression promises to
+    preserve every fact/instruction/constraint losslessly, so a
+    redaction placeholder must survive completely unchanged. Rejects the
+    rewrite in EITHER direction:
+      - a real placeholder present in `original` is missing from `rewritten`
+      - a bracket-shaped span appears in `rewritten` that isn't an exact
+        copy of one of the real placeholders in `original` (catches a
+        model mangling/re-casing a placeholder rather than dropping it
+        cleanly).
+    """
+    real_placeholders = set(_PLACEHOLDER_STRICT_RE.findall(original))
+    if not real_placeholders:
+        return True
+    for ph in real_placeholders:
+        if ph not in rewritten:
+            return False
+    for span in set(_PLACEHOLDER_LOOSE_RE.findall(rewritten)):
+        if span not in real_placeholders:
+            return False
+    return True
+
 
 class LocalCompressor:
-    def __init__(self, model: str = "llama3.2:1b", ollama_url: str = DEFAULT_OLLAMA_URL, timeout: float = 8.0):
+    def __init__(self, model: str = "gemma2:2b", ollama_url: str = DEFAULT_OLLAMA_URL, timeout: float = 8.0):
         self.model = model
         self.ollama_url = ollama_url
         self.timeout = timeout
@@ -76,7 +117,12 @@ class LocalCompressor:
             # Guard rail: only accept the compression if it's actually shorter
             # and not suspiciously tiny (which usually means the local model
             # misfired rather than genuinely compressed).
-            if compressed and len(compressed) < len(text) and len(compressed) > len(text) * 0.15:
+            if (
+                compressed
+                and len(compressed) < len(text)
+                and len(compressed) > len(text) * 0.15
+                and placeholders_preserved(text, compressed)
+            ):
                 return compressed, True
             return text, False
         except requests.exceptions.Timeout:

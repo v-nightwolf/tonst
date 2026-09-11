@@ -54,8 +54,22 @@ def restore_placeholders(text: str, mapping: dict[str, str]) -> str:
     without constructing a throwaway RedactionResult just to call
     .restore() on it.
     """
-    for placeholder, original in mapping.items():
-        text = text.replace(placeholder, original)
+    # Loop (bounded) rather than a single forward pass: if a real
+    # value happens to itself contain another known placeholder token
+    # -- defense in depth against a bug elsewhere producing a nested/
+    # wrapped placeholder, e.g. the redact_llm.py entity-schema guard
+    # rail fix (2026-09-11) -- a single pass can leave an inner
+    # placeholder unrestored purely because of dict iteration order.
+    # Looping until nothing changes makes restoration robust to that
+    # regardless of ordering; the small iteration cap guarantees
+    # termination even in a pathological mapping.
+    for _ in range(5):
+        new_text = text
+        for placeholder, original in mapping.items():
+            new_text = new_text.replace(placeholder, original)
+        if new_text == text:
+            break
+        text = new_text
     return text
 
 
