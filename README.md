@@ -37,8 +37,6 @@ of dropping it outright — see "History compaction" below.
 
 ## Real results (not simulated)
 
-## Real results (not simulated)
-
 Across **384 live API benchmark iterations** spanning 6 enterprise verticals (Medical, Space, Electronics, Finance, IT, Legal), `tonst` cuts prompt payload volume by **up to 29.15% locally** and drives a **53.00% net reduction in API cost** via provider prompt caching—all while maintaining **100.0% structured PII recall with zero privacy leaks**.
 
 | Mechanism | Scope & Scale | Peak Savings | Workload Average | Key Reliability / Safety Metric |
