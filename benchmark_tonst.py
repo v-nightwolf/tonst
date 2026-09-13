@@ -34,7 +34,7 @@ def check_gpu_status():
             flush=True,
         )
 
-def wait_for_ollama_ready(model: str, max_wait_s: float = 120.0, poll_interval_s: float = 2.0) -> None:
+def wait_for_ollama_ready(model: str, max_wait_s: float = 240.0, poll_interval_s: float = 2.0) -> None:
     """
     Ollama's /api/tags responds as soon as the server process is up, but
     /api/generate can silently hang for tens of seconds after that while
@@ -49,11 +49,25 @@ def wait_for_ollama_ready(model: str, max_wait_s: float = 120.0, poll_interval_s
     This blocks until a real /api/generate call succeeds (or max_wait_s
     elapses), so every timing number the benchmark records reflects
     steady-state behavior only.
+
+    IMPORTANT: the per-attempt request timeout below must stay well above
+    a realistic cold-load time. A prior version used timeout=5, which is
+    shorter than gemma2:2b's real cold-load+warmup time under some
+    configs (e.g. OLLAMA_NUM_PARALLEL>1 with a larger context). Ollama
+    treats an abandoned client connection as a reason to abort the
+    in-progress model load server-side ("client connection closed before
+    llama-server finished loading, aborting load" in its log) and restart
+    a fresh llama-server process for the next attempt -- so a too-short
+    timeout doesn't just fail once, it creates a livelock where the model
+    can never finish loading because every poll cancels the previous
+    attempt's progress. 60s per attempt gives real cold loads room to
+    actually complete instead of being repeatedly aborted mid-flight.
     """
     import requests as _requests
 
     url = "http://localhost:11434/api/generate"
     payload = {"model": model, "prompt": "Say hello in one word.", "stream": False}
+    per_attempt_timeout_s = 60.0
     t_start = time.perf_counter()
     attempt = 0
     while True:
@@ -65,12 +79,23 @@ def wait_for_ollama_ready(model: str, max_wait_s: float = 120.0, poll_interval_s
                 flush=True,
             )
             return
+        attempt += 1
+        print(
+            f"[WAIT] Ollama not ready yet ({elapsed:.1f}s elapsed, attempt {attempt}) -- "
+            f"polling /api/generate with a {per_attempt_timeout_s:.0f}s timeout "
+            "(long enough that a real cold load isn't cancelled mid-flight)...",
+            flush=True,
+        )
         try:
-            _requests.post(url, json=payload, timeout=5)
-            print(f"[READY] Ollama answered a real /api/generate call after {elapsed:.1f}s (attempt {attempt + 1}).", flush=True)
+            _requests.post(url, json=payload, timeout=per_attempt_timeout_s)
+            print(f"[READY] Ollama answered a real /api/generate call after {time.perf_counter() - t_start:.1f}s (attempt {attempt}).", flush=True)
             return
-        except _requests.exceptions.RequestException:
-            attempt += 1
+        except _requests.exceptions.RequestException as exc:
+            print(
+                f"[WAIT] attempt {attempt} did not get an answer ({type(exc).__name__}) -- "
+                f"retrying in {poll_interval_s:.0f}s...",
+                flush=True,
+            )
             time.sleep(poll_interval_s)
 
 
