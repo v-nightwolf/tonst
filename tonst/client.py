@@ -41,8 +41,8 @@ Every step here runs LOCALLY, sequentially, before the network call --
 which means every step's wall-clock time is added to the total, not
 overlapped with it. OptimizationReport times each step so that turning
 on an optional heavier step (enhanced redaction, local compression, or
-history compaction -- all three call a local model via Ollama) is an
-informed latency tradeoff, not a guess.
+history compaction -- all three can call a local model) is an informed
+latency tradeoff, not a guess.
 """
 
 from __future__ import annotations
@@ -50,12 +50,18 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
-from .redact import redact, redact_with_llm, restore_placeholders
+from .redact import redact, redact_with_llm, restore_placeholders, RedactionResult
 from .redact_llm import LLMRedactor
 from .trim import mechanical_trim, estimate_tokens, flatten_messages
 from .local_model import LocalCompressor
 from .cache_structuring import PromptParts, structure_for_caching
 from .compactor import HistoryCompactor, compact_history
+
+# Every redaction_backend value TonstClient accepts. "none" and "regex"
+# need no local model at all; "ollama" and "gliner" each call a local
+# model (a generative one via redact_llm.py, or an extractive one via
+# gliner_redact.py, respectively) to catch free-text PII regex can't.
+REDACTION_BACKENDS = {"none", "regex", "ollama", "gliner"}
 
 
 @dataclass
@@ -73,9 +79,9 @@ class OptimizationReport:
     # Per-step wall-clock time in milliseconds. Everything here runs
     # locally and SEQUENTIALLY before call_ms's network/model call, so
     # these add up rather than overlap -- e.g. turning on enhanced
-    # redaction, local compression, or history compaction (all three
-    # call a local model via Ollama) can add real, visible latency on
-    # top of the API call itself. structuring_ms is only nonzero for
+    # redaction, local compression, or history compaction (each can
+    # call a local model) can add real, visible latency on top of the
+    # API call itself. structuring_ms is only nonzero for
     # query_structured(); compaction_ms only for query_messages().
     structuring_ms: float = 0.0
     compaction_ms: float = 0.0
@@ -138,20 +144,92 @@ class TonstClient:
         use_history_compaction: bool = False,
         local_model: str = "gemma2:2b",
         compaction_token_threshold: int = 3000,
+        redaction_backend: Optional[str] = None,
+        redaction_model: Optional[str] = None,
+        gliner_model: str = "urchade/gliner_medium-v2.1",
+        compression_model: Optional[str] = None,
+        compaction_model: Optional[str] = None,
     ):
+        """
+        redaction_backend lets a caller choose what catches free-text PII
+        (names, addresses, employers, codenames) beyond the always-on...
+        actually, beyond regex, which is NOT always-on anymore either --
+        see "none" below. Not every caller needs the same coverage: an
+        app already running on an enterprise/zero-retention LLM
+        agreement, or one whose traffic structurally can't contain PII,
+        pays real local latency for a safety margin it may not need.
+        Independently, redaction_model / compression_model /
+        compaction_model let each Ollama-backed stage use a DIFFERENT
+        model instead of one shared `local_model` for everything.
+
+        redaction_backend values:
+          - None (default): infer from use_enhanced_redaction for
+            backward compatibility -- "ollama" if True, else "regex".
+          - "none": skip PII redaction entirely, including regex. Only
+            mechanical trim/compression/compaction still run. This is
+            NOT the safe default -- use it only when you're confident
+            PII exposure genuinely isn't a concern for this traffic.
+          - "regex": structured PII only (emails, cards, phones, SSNs,
+            IPs) -- fast, dependency-free, catches nothing in free text.
+          - "ollama": regex + a local generative model via redact_llm.py
+            (LLMRedactor). Needs Ollama running; costs real latency
+            (seconds, not milliseconds) -- see research/colab-benchmark-
+            findings.md.
+          - "gliner": regex + GLiNER, a small extractive/zero-shot NER
+            model (gliner_redact.py). No GPU or Ollama needed; CPU
+            latency around 150-250ms; structurally can't produce the
+            JSON-parsing/hallucination failures a generative model can.
+            See research/gliner-sanity-check-findings.md for the full
+            recall comparison -- gliner_medium is the validated default
+            (do not switch to gliner_large: tested, and it's worse, not
+            better). Requires `pip install gliner`, only imported if
+            this backend is actually selected -- not a hard dependency
+            of tonst otherwise.
+
+        redaction_model / compression_model / compaction_model each
+        default to `local_model` when not given, so existing single-
+        model callers are unaffected. Splitting them out matters in
+        practice: a 2026-09-13 benchmark found gemma3:1b is fast and
+        reliable for compression specifically, even though that same
+        small model is unreliable for generative redaction (22.78%
+        free-text recall) -- pairing redaction_backend="gliner" with
+        compression_model="gemma3:1b" captures both findings at once
+        instead of one shared model compromising on both jobs.
+        """
         self.call_fn = call_fn
         self.use_local_compression = use_local_compression
         self.compressor: Optional[LocalCompressor] = (
-            LocalCompressor(model=local_model) if use_local_compression else None
+            LocalCompressor(model=compression_model or local_model) if use_local_compression else None
         )
-        # Enhanced redaction catches free-text PII (names, addresses,
-        # employers, codenames) that regex structurally cannot -- see
-        # redact_llm.py. Off by default because it costs local latency and
-        # needs Ollama running; regex-only redaction still always applies.
-        self.use_enhanced_redaction = use_enhanced_redaction
-        self.llm_redactor: Optional[LLMRedactor] = (
-            LLMRedactor(model=local_model) if use_enhanced_redaction else None
-        )
+
+        # Resolve the redaction backend. Explicit redaction_backend wins;
+        # otherwise fall back to the old boolean for callers who haven't
+        # migrated. Validated eagerly so a typo'd backend name fails at
+        # construction time, not silently mid-run.
+        if redaction_backend is None:
+            redaction_backend = "ollama" if use_enhanced_redaction else "regex"
+        if redaction_backend not in REDACTION_BACKENDS:
+            raise ValueError(
+                f"redaction_backend must be one of {sorted(REDACTION_BACKENDS)}, got {redaction_backend!r}"
+            )
+        self.redaction_backend = redaction_backend
+        # Kept for backward compat: OptimizationReport.used_enhanced_redaction
+        # and any caller reading this attribute directly still get a
+        # meaningful bool, generalized to "any beyond-regex backend ran"
+        # rather than specifically "the Ollama one ran".
+        self.use_enhanced_redaction = redaction_backend in ("ollama", "gliner")
+
+        self.llm_redactor: Optional[LLMRedactor] = None
+        self.gliner_redactor = None
+        if redaction_backend == "ollama":
+            self.llm_redactor = LLMRedactor(model=redaction_model or local_model)
+        elif redaction_backend == "gliner":
+            # Imported lazily so `gliner` and its ML dependencies (torch)
+            # are only ever required when this backend is actually
+            # selected, not for every tonst install.
+            from .gliner_redact import GlinerRedactor
+            self.gliner_redactor = GlinerRedactor(model=gliner_model)
+
         # History compaction: summarizes turns a sliding window would
         # otherwise silently drop, instead of just dropping them -- see
         # compactor.py. Off by default for the same reason as the two
@@ -160,23 +238,30 @@ class TonstClient:
         # missing an optimization.
         self.use_history_compaction = use_history_compaction
         self.history_compactor: Optional[HistoryCompactor] = (
-            HistoryCompactor(model=local_model) if use_history_compaction else None
+            HistoryCompactor(model=compaction_model or local_model) if use_history_compaction else None
         )
         self.compaction_token_threshold = compaction_token_threshold
 
     def _redact(self, text: str):
-        if self.use_enhanced_redaction and self.llm_redactor is not None:
-            return redact_with_llm(text, self.llm_redactor)
-        return redact(text)
+        if self.redaction_backend == "none":
+            return RedactionResult(redacted_text=text, mapping={})
+        if self.redaction_backend == "regex":
+            return redact(text)
+        # "ollama" and "gliner" both expose a duck-type-compatible
+        # .redact(text) -> object with .redacted_text/.mapping, so the
+        # same regex-then-secondary-pass helper works for either one.
+        secondary = self.llm_redactor if self.redaction_backend == "ollama" else self.gliner_redactor
+        return redact_with_llm(text, secondary)
 
     def query(self, prompt: str) -> tuple[str, OptimizationReport]:
         t_start = time.perf_counter()
         original_tokens = estimate_tokens(prompt)
 
-        # 1. Redact sensitive fields locally: regex always, optionally
-        #    layered with the local-LLM pass for free-text PII. This is
-        #    the step most likely to cost real time when enhanced
-        #    redaction is on, since that calls a local model via Ollama.
+        # 1. Redact sensitive fields locally: regex always (unless
+        #    redaction_backend="none"), optionally layered with a
+        #    second-pass local model for free-text PII. This is the
+        #    step most likely to cost real time when that second pass
+        #    is on, since it calls a local model.
         t0 = time.perf_counter()
         redaction = self._redact(prompt)
         t1 = time.perf_counter()

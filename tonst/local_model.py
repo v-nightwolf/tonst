@@ -100,6 +100,21 @@ class LocalCompressor:
     def compress(self, text: str) -> tuple[str, bool]:
         """Returns (possibly_compressed_text, was_compressed)."""
         t0 = time.perf_counter()
+        # Bound worst-case generation length. Unlike redact_llm.py (which has
+        # carried "num_predict": 300 since 2026-09-11 specifically to bound
+        # generation), this call had NO cap at all -- if the model ever drifts
+        # off-task (rambles, or partially answers an embedded instruction
+        # instead of just rewriting it -- a documented failure mode for small
+        # local models under compression-model-replacement-plan.md), nothing
+        # stopped it from generating for 8+ seconds and blowing the timeout.
+        # A benchmark run on 2026-09-13 (--workers 1, so no contention) showed
+        # exactly this: 51/360 compression calls landed within 250ms of the
+        # 8.0s timeout ceiling, each one silently falling back to uncompressed
+        # text on timeout -- paying full latency for zero benefit. Since a
+        # genuine compression is by definition supposed to be SHORTER than the
+        # input, capping generation at ~2x the input's word count leaves ample
+        # room for a real rewrite while bounding runaway generation.
+        max_output_tokens = max(64, int(len(text.split()) * 2))
         try:
             resp = _SESSION.post(
                 self.ollama_url,
@@ -107,6 +122,13 @@ class LocalCompressor:
                     "model": self.model,
                     "prompt": COMPRESSION_INSTRUCTION.format(text=text),
                     "stream": False,
+                    # temperature=0: makes compression deterministic. Verified via
+                    # diagnose_local_llm_perf.py (2026-09-13) to cost nothing in
+                    # latency (746ms vs 714ms avg, within noise) while turning
+                    # VARIED outputs into IDENTICAL ones across repeated calls on
+                    # the same input -- pure upside for guard-rail predictability
+                    # and benchmark reproducibility.
+                    "options": {"temperature": 0.0, "num_predict": max_output_tokens},
                 },
                 timeout=self.timeout,
             )

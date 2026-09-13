@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse, concurrent.futures, json, math, random, statistics, subprocess, sys, threading, time
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 try:
     from tqdm.auto import tqdm
@@ -312,6 +312,19 @@ class SliceMetrics:
     redaction_near_timeout: int = 0
     compression_near_timeout: int = 0
     compaction_near_timeout: int = 0
+    # NEW: per-stage timing breakdown. OptimizationReport already computes
+    # each of these separately per call (client.py) -- previously only their
+    # SUM (local_overhead_ms) was kept, which made it impossible to see
+    # which stage actually dominates a request's timeline without a
+    # separate one-off diagnostic script. Tracking them here means every
+    # real benchmark run answers "where did the time go" directly, across
+    # the full iteration count and case mix, not a hand-picked sample of 4-5.
+    redaction_ms_list: List[float] = field(default_factory=list)
+    trim_ms_list: List[float] = field(default_factory=list)
+    compression_ms_list: List[float] = field(default_factory=list)
+    compaction_ms_list: List[float] = field(default_factory=list)
+    call_ms_list: List[float] = field(default_factory=list)
+    total_ms_list: List[float] = field(default_factory=list)
 
     def to_summary_dict(self) -> dict:
         saved = max(0, self.original_tokens - self.sent_tokens)
@@ -351,12 +364,76 @@ class SliceMetrics:
                 "compression": self.compression_near_timeout,
                 "compaction": self.compaction_near_timeout,
             },
+            # NEW: per-stage timeline. mean+p50 for each of the 5 sequential
+            # steps a request actually goes through (see client.py's docstring
+            # for the order: redact -> trim -> compress -> the real call ->
+            # restore; compaction sits before all of that, only for
+            # query_messages()). These are only non-zero for stages this run
+            # actually enabled/exercised (e.g. compression_ms is ~0 unless
+            # --use-local-compression or --enable-local-llm was passed).
+            "stage_latency_ms": {
+                stage: {
+                    "mean": round(statistics.mean(values), 3) if values else 0.0,
+                    "p50": round(percentile(values, 50), 3),
+                    "p90": round(percentile(values, 90), 3),
+                }
+                for stage, values in (
+                    ("redaction", self.redaction_ms_list),
+                    ("trim", self.trim_ms_list),
+                    ("compression", self.compression_ms_list),
+                    ("compaction", self.compaction_ms_list),
+                    ("call", self.call_ms_list),
+                    ("total", self.total_ms_list),
+                )
+            },
         }
 
-def run_benchmark(iterations: int, local_model: str, use_enhanced_redaction: bool, use_local_compression: bool, use_history_compaction: bool, workers: int = 4, seed: int = 42) -> dict:
+def run_benchmark(
+    iterations: int,
+    local_model: str,
+    use_enhanced_redaction: bool,
+    use_local_compression: bool,
+    use_history_compaction: bool,
+    workers: int = 4,
+    seed: int = 42,
+    redaction_backend: Optional[str] = None,
+    gliner_model: str = "urchade/gliner_medium-v2.1",
+    compression_model: Optional[str] = None,
+    compaction_model: Optional[str] = None,
+) -> dict:
     check_gpu_status()
-    if use_enhanced_redaction or use_local_compression or use_history_compaction:
-        wait_for_ollama_ready(local_model)
+    # Explicit redaction_backend wins; otherwise infer from the older
+    # boolean for backward compatibility -- same rule TonstClient uses.
+    resolved_redaction_backend = redaction_backend if redaction_backend is not None else ("ollama" if use_enhanced_redaction else "regex")
+    # Warm up every DISTINCT Ollama model this run will actually call.
+    # "gliner" needs no Ollama warmup for redaction at all, and a
+    # compression/compaction override (e.g. gemma3:1b while redaction
+    # uses gliner) must be warmed under ITS OWN name, not local_model's
+    # -- otherwise that model's first real call eats a cold-load penalty
+    # the benchmark would misattribute as steady-state latency.
+    models_to_warm = set()
+    if resolved_redaction_backend == "ollama":
+        models_to_warm.add(local_model)
+    if use_local_compression:
+        models_to_warm.add(compression_model or local_model)
+    if use_history_compaction:
+        models_to_warm.add(compaction_model or local_model)
+    for m in models_to_warm:
+        wait_for_ollama_ready(m)
+    if resolved_redaction_backend == "gliner":
+        # Same reasoning as wait_for_ollama_ready(), for a different cold-
+        # start cost: GLiNER's model load happens in-process (no server
+        # to pre-warm), and the module-level cache in gliner_redact.py
+        # means whichever iteration runs first pays that multi-second
+        # load -- found 2026-09-13 via a live run where one supervised/IT
+        # case alone accounted for a 6.2s p90 despite every other case
+        # landing at 175-500ms. Loading it here, before any timed
+        # iteration starts, keeps that one-time cost out of the
+        # steady-state numbers entirely.
+        print("[GLINER] warming up model (one-time load)...", flush=True)
+        from tonst.gliner_redact import GlinerRedactor
+        GlinerRedactor(model=gliner_model).is_available()
+        print("[GLINER] ready.", flush=True)
     industries, modes = list(INDUSTRY_CONFIGS.keys()), ["supervised", "unsupervised"]
     overall_slice = SliceMetrics()
     by_mode = {m: SliceMetrics() for m in modes}
@@ -377,13 +454,37 @@ def run_benchmark(iterations: int, local_model: str, use_enhanced_redaction: boo
             tokens = [w for w in trimmed_prompt.split() if w.startswith("[[") and "]]" in w]
             return f"Processed request successfully. Reference tokens: {' '.join(tokens[:4])}"
 
+        # messages-path cases historically forced the backend down to
+        # "regex" whenever ANY enhanced backend was selected. That rule
+        # predates GLiNER: per research/colab-benchmark-findings.md, its
+        # real purpose was avoiding TWO independent slow Ollama calls
+        # with their own 8s timeouts stacking on the same multi-turn
+        # iteration (LLMRedactor.redact() per message + HistoryCompactor
+        # .summarize() for the dropped turns) -- a genuine Ollama-
+        # specific timeout/latency risk. GLiNER has no such risk (one
+        # in-process ~200-400ms call, no server round trip, no timeout
+        # to stack), so forcing it down to regex-only here was just
+        # porting the old ollama-specific workaround too broadly -- it
+        # silently zeroed out GLiNER's free-text recall on ~1/6 of every
+        # benchmark run for a reason that never applied to it (found
+        # 2026-09-13 while explaining a 70-73% vs ~89% in-pipeline
+        # recall gap -- see gliner-sanity-check-findings.md). Only
+        # "ollama" still gets the forced-regex fallback here; "gliner"
+        # and "none" pass through untouched.
+        if messages is not None and resolved_redaction_backend == "ollama":
+            effective_redaction_backend = "regex"
+        else:
+            effective_redaction_backend = resolved_redaction_backend
         client = TonstClient(
             call_fn=mock_paid_api,
             use_local_compression=use_local_compression,
-            use_enhanced_redaction=(use_enhanced_redaction if messages is None else False),
             use_history_compaction=use_history_compaction,
             local_model=local_model,
             compaction_token_threshold=100,
+            redaction_backend=effective_redaction_backend,
+            gliner_model=gliner_model,
+            compression_model=compression_model,
+            compaction_model=compaction_model,
         )
 
         if messages is not None:
@@ -420,6 +521,12 @@ def run_benchmark(iterations: int, local_model: str, use_enhanced_redaction: boo
                 target.free_text_pii_leaks += free_text_leaks
                 target.round_trip_restoration_failures += rt_fail
                 target.local_overhead_ms.append(report.local_overhead_ms)
+                target.redaction_ms_list.append(report.redaction_ms)
+                target.trim_ms_list.append(report.trim_ms)
+                target.compression_ms_list.append(report.compression_ms)
+                target.compaction_ms_list.append(report.compaction_ms)
+                target.call_ms_list.append(report.call_ms)
+                target.total_ms_list.append(report.total_ms)
                 if redaction_timed_out:
                     target.redaction_near_timeout += 1
                 if compression_timed_out:
@@ -465,15 +572,26 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--model", type=str, default="gemma2:2b")
     parser.add_argument("--enable-local-llm", action="store_true", help="Shorthand for enabling all three local-model flags below at once.")
-    parser.add_argument("--use-enhanced-redaction", action="store_true", help="Isolate just LLMRedactor (free-text PII catch).")
+    parser.add_argument("--use-enhanced-redaction", action="store_true", help="Isolate just LLMRedactor (free-text PII catch). Superseded by --redaction-backend if that's also given.")
     parser.add_argument("--use-local-compression", action="store_true", help="Isolate just LocalCompressor.")
     parser.add_argument("--use-history-compaction", action="store_true", help="Isolate just HistoryCompactor (only affects unsupervised_multi_turn iterations).")
+    parser.add_argument("--redaction-backend", type=str, choices=["ollama", "gliner", "regex", "none"], default=None, help="What catches free-text PII beyond regex. 'ollama' = local generative model via redact_llm.py (same as --use-enhanced-redaction). 'gliner' = extractive NER model, no GPU/Ollama needed for this step (see research/gliner-sanity-check-findings.md). 'regex' = structured PII only. 'none' = skip PII redaction entirely. Omit to fall back to --use-enhanced-redaction/--enable-local-llm.")
+    parser.add_argument("--gliner-model", type=str, default="urchade/gliner_medium-v2.1", help="Only used when --redaction-backend gliner.")
+    parser.add_argument("--compression-model", type=str, default=None, help="Ollama model for the compression step; defaults to --model if not given.")
+    parser.add_argument("--compaction-model", type=str, default=None, help="Ollama model for history compaction; defaults to --model if not given.")
     parser.add_argument("--output", type=str, default="report_multi_industry.json")
     args = parser.parse_args()
     use_redaction = args.enable_local_llm or args.use_enhanced_redaction
     use_compression = args.enable_local_llm or args.use_local_compression
     use_compaction = args.enable_local_llm or args.use_history_compaction
-    report = run_benchmark(args.iterations, args.model, use_redaction, use_compression, use_compaction, workers=args.workers)
+    report = run_benchmark(
+        args.iterations, args.model, use_redaction, use_compression, use_compaction,
+        workers=args.workers,
+        redaction_backend=args.redaction_backend,
+        gliner_model=args.gliner_model,
+        compression_model=args.compression_model,
+        compaction_model=args.compaction_model,
+    )
     with open(args.output, "w") as f:
         json.dump(report, f, indent=2)
     print(json.dumps(report["overall_results"], indent=2), flush=True)

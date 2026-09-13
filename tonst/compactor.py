@@ -102,10 +102,32 @@ def _no_corrupted_placeholders(original: str, summary: str) -> bool:
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
     t0 = time.perf_counter()
+    # Derived from the prompt itself (which already embeds older_text via
+    # COMPACTION_PROMPT.format()) rather than threaded through as an extra
+    # parameter -- this keeps _call_model's public 3-arg signature (prompt,
+    # model, timeout) unchanged, since model_call_fn is an injectable
+    # interface test_tonst.py relies on with exactly that shape.
+    max_output_tokens = max(64, int(len(prompt.split()) * 0.8))
     try:
         resp = _SESSION.post(
             DEFAULT_OLLAMA_URL,
-            json={"model": model, "prompt": prompt, "stream": False},
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                # temperature=0: same rationale as local_model.py's compress() --
+                # deterministic summaries, no measured latency cost (see
+                # diagnose_local_llm_perf.py, 2026-09-13).
+                # num_predict: defensive cap, same reasoning as the fix applied
+                # to local_model.py's compress() on 2026-09-13 (that call had
+                # NO cap at all and 51/360 iterations landed within 250ms of
+                # the 8s timeout as a result). Compaction hasn't shown that
+                # failure mode yet (0 near-timeouts in both benchmark runs so
+                # far), but a summary is supposed to be well under the
+                # original's length by design (guard rail requires < 60%), so
+                # there's no reason to leave generation unbounded here either.
+                "options": {"temperature": 0.0, "num_predict": max_output_tokens},
+            },
             timeout=timeout,
         )
         resp.raise_for_status()

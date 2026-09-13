@@ -116,7 +116,26 @@ def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[st
     try:
         resp = _SESSION.post(
             DEFAULT_OLLAMA_URL,
-            json={"model": model, "prompt": prompt, "stream": False, "options": {"num_predict": 300}},
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                # num_predict kept at 300 (reverted 2026-09-13, per user call).
+                # A lower cap (150 was tried) would bound worst-case latency for a
+                # chatty non-compliant response, but the failure mode is worse than
+                # it is for compress()/summarize(): a truncated JSON array is often
+                # unbalanced brackets/quotes, which _extract_json_array()'s parser
+                # can't recover ANY entities from -- not just the ones past the
+                # cutoff, the whole response. Compression truncation degrades
+                # gracefully (a shorter but still usable rewrite); JSON truncation
+                # doesn't. Redaction's near-timeout count is already low (10/360,
+                # 1/60) -- it was never the source of the earlier latency blowup
+                # (compression was) -- so there's little latency to buy here
+                # against a real risk of silently losing entity detection on a
+                # legitimately busy case. temperature=0 is kept (no such
+                # trade-off: verified cost-free in the 2026-09-13 diagnostic).
+                "options": {"temperature": 0.0, "num_predict": 300},
+            },
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -323,10 +342,30 @@ class LLMRedactor:
                 span = match.group(0)
             placeholder = _placeholder_for(label, span)
             mapping[placeholder] = span
-            # Replace only the first remaining occurrence per entity so
-            # repeated identical spans (e.g. a name used twice) each get
-            # their own placeholder-to-value mapping correctly restored.
-            result_text = result_text.replace(span, placeholder, 1)
+            # Replace EVERY occurrence of this span, not just one.
+            # BUG FOUND 2026-09-13 via diagnose_placeholder_inflation.py:
+            # this used to be `.replace(span, placeholder, 1)` -- the
+            # comment here previously assumed a repeated name would
+            # appear as a SEPARATE list item per occurrence in the
+            # model's JSON output, so each loop iteration would consume
+            # one more remaining occurrence. In practice a small model
+            # asked to "find PII spans" naturally reports each unique
+            # value ONCE even when it appears multiple times in the
+            # source text (confirmed directly: a deliberately-duplicated
+            # contact block in unsupervised_bloated_logs/verbose_dump
+            # test cases came back as a single entity, not two) -- so
+            # with the old count=1 limit, only the FIRST occurrence ever
+            # got redacted and every repeat was sent to the paid API
+            # completely unredacted. That's a real PII leak, not just a
+            # missed token-savings opportunity (it also happened to
+            # break mechanical_trim's ability to dedupe the two
+            # otherwise-identical blocks, since after only-partial
+            # redaction they were no longer byte-for-byte identical --
+            # that's what the 131-vs-181-token gap in the IT bloated_logs
+            # case actually was). The placeholder is deterministic (a
+            # hash of the span), so redacting every occurrence still
+            # restores correctly via restore_placeholders().
+            result_text = result_text.replace(span, placeholder)
 
         return LLMRedactionResult(
             redacted_text=result_text,
