@@ -1,1 +1,7 @@
 requests>=2.25
+
+# Optional, only needed for redaction_backend="gliner" (see tonst/gliner_redact.py
+# and pyproject.toml's [project.optional-dependencies] "gliner" extra). Every
+# other redaction_backend (none/regex/ollama) works without this. Pulls in
+# torch/transformers/huggingface_hub transitively -- expect a larger install.
+# gliner>=0.2

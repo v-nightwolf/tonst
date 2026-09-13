@@ -12,7 +12,9 @@ Your app
    ▼
 TonstClient.query(prompt)
    │
-   ├─ 1. Local PII redaction (regex, optionally + local-model free-text pass)
+   ├─ 1. Local PII redaction (regex always-on by default, optionally + a
+   │     free-text pass -- GLiNER or Ollama, your choice -- see
+   │     "Why enhanced redaction matters" below)
    ├─ 2. Mechanical trim (dedupe, whitespace, history truncation)
    ├─ 3. Optional local-model compression (Ollama, off by default)
    │
@@ -50,6 +52,16 @@ Across **384 live API benchmark iterations** spanning 6 enterprise verticals (Me
 
 To evaluate local optimization independent of provider-side caching, `tonst` was benchmarked across a 360-run test matrix using Anthropic's `claude-3-5-sonnet-20241022` pricing baseline ($3.00 per 1M input tokens). The benchmark tests two prompt paradigms across six domain verticals (60 iterations per vertical): **Supervised** (strictly structured fields with explicit PII keys) and **Unsupervised** (unstructured free-text narrative inputs containing embedded PII, duplicate instructions, and redundant whitespace).
 
+> **Note on the Free-Text PII Recall row below:** this suite predates the
+> `redaction_backend="gliner"` option and measures regex-only free-text
+> catch rate (no enhanced backend enabled). It has not been re-run with
+> GLiNER or Ollama enabled, so the token/cost/latency numbers in this
+> specific table shouldn't be read as GLiNER's numbers. For the current,
+> validated free-text recall with `redaction_backend="gliner"` enabled
+> (87.41% overall, 100% supervised, zero leaks, zero restoration
+> failures, from a separate 180-iteration run), see "Why enhanced
+> redaction matters" above and `research/gliner-sanity-check-findings.md`.
+
 | Metric | Supervised Paradigm | Unsupervised Paradigm | Total / Combined |
 |---|---|---|---|
 | **Iterations** | 180 | 180 | **360** |
@@ -75,7 +87,7 @@ To evaluate local optimization independent of provider-side caching, `tonst` was
 
 **Technical Privacy & Latency Findings**
 * **Zero Privacy Leaks & Perfect Restoration**: Across all 360 runs, `tonst` achieved **100.0% recall on structured PII fields** with zero unredacted values reaching the API endpoint and zero round-trip placeholder restoration failures.
-* **Free-Text PII Sensitivity**: Regex-based redaction caught 87.59% of free-text PII in supervised contexts but only 27.41% in raw unsupervised text. For complete free-text coverage (names, addresses in prose), enable local LLM redaction (`use_enhanced_redaction=True`).
+* **Free-Text PII Sensitivity**: Regex-only redaction (no enhanced backend) caught 87.59% of free-text PII in supervised contexts but only 27.41% in raw unsupervised text. For complete free-text coverage (names, addresses in prose), enable an enhanced backend via `redaction_backend="gliner"` (recommended) or `redaction_backend="ollama"` — see "Why enhanced redaction matters" above for current, validated recall numbers with GLiNER enabled.
 * **Local Latency Overhead**: Running local enhanced PII redaction and trimming adds a mean local processing delay of 4,475.6 ms before API dispatch (p50: 4,666.0 ms, p90: 5,775.0 ms, p99: 6,701.7 ms). This compute overhead runs entirely in-process on the local host.
 
 ---
@@ -132,10 +144,23 @@ Reproduce this yourself with `real_api_demo.py` (see below).
 pip install -r requirements.txt
 ```
 
-This installs the one dependency the code needs: `requests` (for talking
-to a local Ollama instance and, in `real_api_demo.py`, the Anthropic API
-directly). If you see `ModuleNotFoundError: No module named 'requests'`
-when running the demo, this step was skipped — run it and re-try.
+This installs the one hard dependency the code needs: `requests` (for
+talking to a local Ollama instance and, in `real_api_demo.py`, the
+Anthropic API directly). If you see `ModuleNotFoundError: No module
+named 'requests'` when running the demo, this step was skipped — run it
+and re-try.
+
+If you plan to use `redaction_backend="gliner"` (recommended — see "Why
+enhanced redaction matters" below), also install its optional extra:
+
+```bash
+pip install -e ".[gliner]"
+```
+
+This pulls in `gliner` plus its transitive ML dependencies (`torch`,
+`transformers`, `huggingface_hub`) — expect a noticeably larger install
+than the base package. Every other `redaction_backend` value
+(`"none"`/`"regex"`/`"ollama"`) works without it.
 
 Full packaging (once you're ready to `pip install` it as a real package):
 
@@ -143,9 +168,9 @@ Full packaging (once you're ready to `pip install` it as a real package):
 pip install tonst
 ```
 
-(Not yet published — this POC ships as source. `pip install -e .` from this
-directory works once `pyproject.toml` is in place, or copy the `tonst/`
-folder directly into your project.)
+(Not yet published to PyPI — this POC ships as source. `pip install -e .`
+from this directory already works, since `pyproject.toml` is in place;
+or copy the `tonst/` folder directly into your project.)
 
 ## Why this shape
 
@@ -318,6 +343,7 @@ print(f"tonst overhead: {report.local_overhead_ms:.1f}ms, API call: {report.call
 | `tonst/cache_structuring.py` | `PromptParts` + helpers that order a request stable-first/variable-last and build a real Anthropic `cache_control` request body — see "Prompt-caching structuring" above. |
 | `tonst/redact.py` | Regex-based PII detection + reversible, deterministic redaction, plus `redact_with_llm()` to layer in the enhanced pass below. |
 | `tonst/redact_llm.py` | **The differentiator.** Local-LLM-based redaction for free-text PII (names, addresses, employers, codenames) that regex structurally cannot catch. Strict JSON contract, hallucination guard rail, fails soft if Ollama isn't running. |
+| `tonst/gliner_redact.py` | **The recommended differentiator.** Extractive/zero-shot NER redaction for the same free-text PII, via GLiNER instead of a generative model -- no GPU or Ollama needed, ~150-250ms latency, structurally can't hallucinate a span. See `redaction_backend="gliner"` in "Why enhanced redaction matters" below. |
 | `tonst/trim.py` | Token estimation, whitespace/duplicate cleanup, chat-history truncation. |
 | `tonst/compactor.py` | `HistoryCompactor` + `compact_history()` — local-model summarization of conversation history that falls outside the sliding window, instead of discarding it. See "History compaction" above. |
 | `tonst/providers/openai.py` | OpenAI prompt-caching: automatic-ordering request building, the optional GPT-5.6+ explicit mode, per-model discount table, and usage parsing for both the Chat Completions and Responses API JSON shapes. See "Multi-provider support" below. |
@@ -343,19 +369,64 @@ numbers — but it has no way to know "Priya Malhotra" is a person's name,
 or that "Project Nightingale" is a confidential codename, without some
 form of semantic understanding.
 
-`redact_llm.py` closes that gap using a small local model (via Ollama) to
-find free-text PII spans, while keeping the fast regex pass as the first,
-always-on line of defense. Enable it with one flag:
+`TonstClient` closes that gap with a `redaction_backend` parameter, so
+you pick how much coverage you need instead of one fixed behavior:
 
 ```python
-client = TonstClient(call_fn=my_api_call, use_enhanced_redaction=True)
+client = TonstClient(call_fn=my_api_call, redaction_backend="gliner")
 ```
 
-If Ollama isn't installed or running, this degrades gracefully to
-regex-only redaction — it never breaks the pipeline, and it never
-silently trusts a hallucinated span from the model (see the guard rail
-in `redact_llm.py` that verifies every flagged span actually appears
-verbatim in the source text before redacting it).
+| `redaction_backend` | What it catches | Local model needed | Notes |
+|---|---|---|---|
+| `"none"` | Nothing — not even regex | — | Only for traffic you're confident carries no PII |
+| `"regex"` (default) | Structured PII only (emails, cards, phones, SSNs, IPs) | — | Fast, dependency-free, catches nothing in free text |
+| `"gliner"` | Regex + free-text PII (names, employers, codenames) via GLiNER | CPU only, no Ollama | ~150-250ms latency, structurally can't hallucinate (see below) |
+| `"ollama"` | Regex + free-text PII via a local generative model | Ollama running | Seconds, not milliseconds — see `research/colab-benchmark-findings.md` |
+
+**`gliner` is the recommended enhanced backend.** GLiNER
+(`gliner_redact.py`) is a small, extractive/zero-shot NER model: it
+returns spans/offsets into the *original* text rather than generating
+new text, so it structurally cannot produce the JSON-parsing/
+truncation/hallucination failures a generative model can, and it needs
+no GPU or separately-running service. Install it with:
+
+```bash
+pip install tonst[gliner]      # or: pip install -e ".[gliner]" from this repo
+```
+
+(`gliner` and its transitive ML dependencies — `torch`, `transformers`,
+`huggingface_hub` — are only ever imported if `redaction_backend="gliner"`
+is actually selected; every other backend works without installing it.)
+
+Validated end to end (180 live iterations, `gliner_medium` +
+`gemma3:1b` for compression): **87.41% free-text PII recall**, **100%
+recall on the supervised/structured-field paradigm**, **zero round-trip
+restoration failures**, **zero PII leaks**. The one known, accepted gap:
+codename recall on the two "supervised" prompt shapes sits around
+58-60%, because GLiNER's zero-shot label matching leans on lexical
+overlap between the label and the span (a codename literally containing
+a cue word like "Project" is caught reliably; one that doesn't — e.g.
+"Study NEURO-Vanguard", "Ledger Settlement-X" — is caught less often).
+Full methodology, per-run numbers, and the threshold/label-wording
+experiments that ruled out cheaper fixes are in
+`research/gliner-sanity-check-findings.md`.
+
+`redact_llm.py` (the `"ollama"` backend) remains available for cases
+that need a generative model's broader judgment and can tolerate its
+latency and occasional hallucination-guard-rail rejections. Both
+enhanced backends degrade gracefully if their local model isn't
+available — the pipeline never breaks, and neither ever silently trusts
+a flagged span that doesn't verbatim-match the source text (see the
+guard rails in `redact_llm.py` and `gliner_redact.py`).
+
+Independently of the backend, `redaction_model` / `compression_model` /
+`compaction_model` let each Ollama-backed stage use a different model
+instead of one shared model compromising on every job — see the
+`TonstClient.__init__` docstring in `client.py` for details.
+
+The old `use_enhanced_redaction=True` boolean still works (it now maps
+to `redaction_backend="ollama"` for backward compatibility) but new code
+should use `redaction_backend` directly.
 
 ## Running the demo
 

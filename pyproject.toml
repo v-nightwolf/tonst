@@ -11,6 +11,12 @@ dependencies = [
 
 [project.optional-dependencies]
 local-model = []  # Ollama is a separate runtime, not a pip dependency
+# redaction_backend="gliner" (see tonst/client.py, tonst/gliner_redact.py):
+# unlike Ollama, GLiNER genuinely is a pip dependency, plus its transitive
+# ML stack (torch, transformers, huggingface_hub). Only needed if this
+# backend is actually selected -- gliner_redact.py imports it lazily, and
+# every other redaction_backend (none/regex/ollama) works without it.
+gliner = ["gliner>=0.2"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
