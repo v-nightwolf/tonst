@@ -39,56 +39,64 @@ of dropping it outright — see "History compaction" below.
 
 ## Real results (not simulated)
 
-Across **384 live API benchmark iterations** spanning 6 enterprise verticals (Medical, Space, Electronics, Finance, IT, Legal), `tonst` cuts prompt payload volume by **up to 29.15% locally** and drives a **53.00% net reduction in API cost** via provider prompt caching—all while maintaining **100.0% structured PII recall with zero privacy leaks**.
+Across **384 live API benchmark iterations** spanning 6 enterprise verticals (Medical, Space, Electronics, Finance, IT, Legal), `tonst` cuts prompt payload volume by **up to 23.68% locally** (running the full pipeline: GLiNER redaction + mechanical trim + compression) and drives a **53.00% net reduction in API cost** via provider prompt caching—all while maintaining **100.0% structured PII recall with zero privacy leaks**.
 
 | Mechanism | Scope & Scale | Peak Savings | Workload Average | Key Reliability / Safety Metric |
 |---|---|---|---|---|
-| **Local Mechanical Trimming** | 360 Runs (`claude-3-5-sonnet-20241022`) | **29.15% token drop** (Medical) | **16.91% token drop** | 100.0% PII Recall (0 leaks) |
+| **Local Trim + GLiNER Redaction + Compression** | 360 Runs (`claude-3-5-sonnet-20241022` pricing baseline) | **23.68% token drop** (Space) | **21.09% token drop** | 100.0% Structured PII Recall (0 leaks), 87.78% Free-Text PII Recall |
 | **Provider Prompt Caching** | 24 Calls (`gemini-3.1-flash-lite`) | **72.00% read discount** | **53.00% net cost drop** | Zero cache-key leakage |
 
 ---
 
 ### Mechanical Trimming & Privacy Benchmark (360-Iteration Suite)
 
-To evaluate local optimization independent of provider-side caching, `tonst` was benchmarked across a 360-run test matrix using Anthropic's `claude-3-5-sonnet-20241022` pricing baseline ($3.00 per 1M input tokens). The benchmark tests two prompt paradigms across six domain verticals (60 iterations per vertical): **Supervised** (strictly structured fields with explicit PII keys) and **Unsupervised** (unstructured free-text narrative inputs containing embedded PII, duplicate instructions, and redundant whitespace).
-
-> **Note on the Free-Text PII Recall row below:** this suite predates the
-> `redaction_backend="gliner"` option and measures regex-only free-text
-> catch rate (no enhanced backend enabled). It has not been re-run with
-> GLiNER or Ollama enabled, so the token/cost/latency numbers in this
-> specific table shouldn't be read as GLiNER's numbers. For the current,
-> validated free-text recall with `redaction_backend="gliner"` enabled
-> (87.41% overall, 100% supervised, zero leaks, zero restoration
-> failures, from a separate 180-iteration run), see "Why enhanced
-> redaction matters" above and `research/gliner-sanity-check-findings.md`.
+To evaluate the full local pipeline (not just mechanical trimming in
+isolation), `tonst` was benchmarked across the same 360-run test matrix
+using Anthropic's `claude-3-5-sonnet-20241022` pricing baseline ($3.00
+per 1M input tokens): six domain verticals, 60 iterations each, split
+evenly between **Supervised** (strictly structured fields with explicit
+PII keys) and **Unsupervised** (unstructured free-text narrative inputs
+containing embedded PII, duplicate instructions, and redundant
+whitespace) -- now run with the actual recommended production
+configuration: `redaction_backend="gliner"` (`gliner_medium`, threshold
+0.22) for free-text PII, plus `gemma3:1b` for local compression,
+`--workers 1`. This replaces an earlier version of this table that only
+measured mechanical trim + regex-only redaction (no enhanced backend, no
+compression) -- see `research/gliner-sanity-check-findings.md` for that
+superseded run's numbers. This run was produced on a Google Colab T4 GPU
+instance via `tonst_gliner_full_benchmark.ipynb`, using
+`benchmark_tonst.py`'s built-in mocked "paid API" call -- so the token
+and PII-recall numbers below are real, but the dollar figure is still an
+estimate against a hardcoded $3/M rate, not a real invoice (see
+`research/colab-benchmark-findings.md`'s "Cost benchmarking" section).
 
 | Metric | Supervised Paradigm | Unsupervised Paradigm | Total / Combined |
 |---|---|---|---|
 | **Iterations** | 180 | 180 | **360** |
 | **Original Tokens** | 32,189 | 40,077 | **72,266** |
-| **Tokens Sent to API** | 30,399 | 29,650 | **60,049** |
-| **Tokens Saved** | 1,790 (**5.56%**) | 10,427 (**26.02%**) | **12,217 (16.91%)** |
+| **Tokens Sent to API** | 29,743 | 27,279 | **57,022** |
+| **Tokens Saved** | 2,446 (**7.60%**) | 12,798 (**31.93%**) | **15,244 (21.09%)** |
 | **Supervised PII Recall** | 100.0% | 100.0% | **100.0% (0 Leaks)** |
-| **Free-Text PII Recall** | 87.59% | 27.41% | **57.50%** |
+| **Free-Text PII Recall** | 77.04% | 98.52% | **87.78%** |
 | **Restoration Failures** | 0 | 0 | **0** |
-| **Mean Local Overhead** | 4,689.3 ms | 4,261.9 ms | **4,475.6 ms** |
-| **Estimated Cost Saved** | — | — | **$0.036651 USD** |
+| **Mean Local Overhead** | 1,814.5 ms | 2,702.1 ms | **2,258.3 ms** |
+| **Estimated Cost Saved** | — | — | **$0.045732 USD** |
 
 **Industry Performance Breakdown**
 
 | Industry | Supervised Savings | Unsupervised Savings | Overall Token Savings (%) | Total Tokens Saved |
 |---|---|---|---|---|
-| **Medical** | 5.57% | **29.15%** | **18.70%** | 2,259 |
-| **Space** | 5.99% | 28.10% | **18.26%** | 2,259 |
-| **Electronics** | 5.17% | 26.91% | **17.08%** | 2,046 |
-| **Finance** | 5.55% | 25.37% | **16.62%** | 2,020 |
-| **IT** | 5.67% | 23.70% | **15.59%** | 1,812 |
-| **Legal** | 5.41% | 22.74% | **15.10%** | 1,821 |
+| **Space** | 12.52% | **32.63%** | **23.68%** | 2,930 |
+| **Medical** | 6.28% | 36.54% | **23.13%** | 2,794 |
+| **Finance** | 9.63% | 31.71% | **21.96%** | 2,669 |
+| **Legal** | 5.38% | 30.67% | **19.51%** | 2,353 |
+| **IT** | 5.78% | 30.58% | **19.43%** | 2,258 |
+| **Electronics** | 5.82% | 29.34% | **18.70%** | 2,240 |
 
 **Technical Privacy & Latency Findings**
 * **Zero Privacy Leaks & Perfect Restoration**: Across all 360 runs, `tonst` achieved **100.0% recall on structured PII fields** with zero unredacted values reaching the API endpoint and zero round-trip placeholder restoration failures.
-* **Free-Text PII Sensitivity**: Regex-only redaction (no enhanced backend) caught 87.59% of free-text PII in supervised contexts but only 27.41% in raw unsupervised text. For complete free-text coverage (names, addresses in prose), enable an enhanced backend via `redaction_backend="gliner"` (recommended) or `redaction_backend="ollama"` — see "Why enhanced redaction matters" above for current, validated recall numbers with GLiNER enabled.
-* **Local Latency Overhead**: Running local enhanced PII redaction and trimming adds a mean local processing delay of 4,475.6 ms before API dispatch (p50: 4,666.0 ms, p90: 5,775.0 ms, p99: 6,701.7 ms). This compute overhead runs entirely in-process on the local host.
+* **Free-Text PII Sensitivity**: `redaction_backend="gliner"` + `gemma3:1b` compression together caught **87.78%** of free-text PII overall (77.04% supervised / 98.52% unsupervised) — up from a 57.50% regex-only baseline (the number this table showed before GLiNER was wired in; still the right comparison for "what does enabling an enhanced backend actually buy you"). The residual gap is the known, accepted GLiNER limitation on the two "supervised" prompt shapes specifically (codename recall ~58-60% there, see "Why enhanced redaction matters" above) — not a bug, and not something regex-only redaction could have caught at all.
+* **Local Latency Overhead**: Running local GLiNER redaction + `gemma3:1b` compression adds a mean local processing delay of 2,258.3 ms before API dispatch (p50: 2,022.8 ms, p90: 4,031.7 ms, p99: 5,213.7 ms) — measured on a Google Colab T4 instance, where GLiNER itself ran on CPU (this step doesn't use the GPU; see "Why enhanced redaction matters" above for a second measurement from different hardware that came out meaningfully faster). A separate `--workers 4` run of this same pipeline confirmed correctness holds under concurrency (identical recall/leak/restoration numbers) but is NOT free on latency — see `research/gliner-sanity-check-findings.md` for the full breakdown.
 
 ---
 
@@ -380,7 +388,7 @@ client = TonstClient(call_fn=my_api_call, redaction_backend="gliner")
 |---|---|---|---|
 | `"none"` | Nothing — not even regex | — | Only for traffic you're confident carries no PII |
 | `"regex"` (default) | Structured PII only (emails, cards, phones, SSNs, IPs) | — | Fast, dependency-free, catches nothing in free text |
-| `"gliner"` | Regex + free-text PII (names, employers, codenames) via GLiNER | CPU only, no Ollama | ~150-250ms latency, structurally can't hallucinate (see below) |
+| `"gliner"` | Regex + free-text PII (names, employers, codenames) via GLiNER | CPU only, no Ollama | ~150ms-1.3s latency, hardware-dependent (see below); structurally can't hallucinate |
 | `"ollama"` | Regex + free-text PII via a local generative model | Ollama running | Seconds, not milliseconds — see `research/colab-benchmark-findings.md` |
 
 **`gliner` is the recommended enhanced backend.** GLiNER
@@ -398,18 +406,39 @@ pip install tonst[gliner]      # or: pip install -e ".[gliner]" from this repo
 `huggingface_hub` — are only ever imported if `redaction_backend="gliner"`
 is actually selected; every other backend works without installing it.)
 
-Validated end to end (180 live iterations, `gliner_medium` +
-`gemma3:1b` for compression): **87.41% free-text PII recall**, **100%
-recall on the supervised/structured-field paradigm**, **zero round-trip
-restoration failures**, **zero PII leaks**. The one known, accepted gap:
-codename recall on the two "supervised" prompt shapes sits around
-58-60%, because GLiNER's zero-shot label matching leans on lexical
-overlap between the label and the span (a codename literally containing
-a cue word like "Project" is caught reliably; one that doesn't — e.g.
-"Study NEURO-Vanguard", "Ledger Settlement-X" — is caught less often).
-Full methodology, per-run numbers, and the threshold/label-wording
-experiments that ruled out cheaper fixes are in
-`research/gliner-sanity-check-findings.md`.
+Validated end to end at two scales: an initial 180-iteration run
+(Apple Silicon Mac, CPU-only, `--workers 1`) and a full 360-iteration
+replication on a Google Colab T4 GPU instance (`--workers 1`) that came
+back consistent — **87.41%** and **87.78%** free-text PII recall
+respectively, both with **100%** recall on the supervised/structured-
+field paradigm, **zero round-trip restoration failures**, and **zero
+PII leaks**. The one known, accepted gap: codename recall on the two
+"supervised" prompt shapes sits around 58-60%, because GLiNER's
+zero-shot label matching leans on lexical overlap between the label and
+the span (a codename literally containing a cue word like "Project" is
+caught reliably; one that doesn't — e.g. "Study NEURO-Vanguard",
+"Ledger Settlement-X" — is caught less often). Full methodology,
+per-run numbers, and the threshold/label-wording experiments that ruled
+out cheaper fixes are in `research/gliner-sanity-check-findings.md`.
+
+GLiNER's own absolute latency turned out to be hardware-dependent, not
+a fixed number: the same `gliner_medium` model averaged ~269ms per call
+on the Mac's Apple Silicon CPU vs. ~1.3s on Colab's CPU (`gliner_redact.py`
+doesn't move the model onto CUDA, so the T4 GPU sitting alongside it on
+Colab isn't actually used for this step — both runs were CPU-bound).
+Budget from a measurement on your actual target hardware rather than
+either number in isolation.
+
+A `--workers 4` (production-default) run of the same full pipeline on
+Colab confirmed correctness holds under concurrency — identical
+recall/leak/restoration-failure numbers to the `--workers 1` run,
+settling the question `research/gliner-sanity-check-findings.md` had
+flagged as open. It is **not** free on latency, though: both redaction
+and compression slowed down substantially under 4-way contention (mean
+redaction latency roughly tripled, with about 14% of calls landing
+within 250ms of the harness's timeout-tracking threshold) — correct,
+but not the naive 4x throughput speedup one might expect. Full numbers
+in the research doc.
 
 `redact_llm.py` (the `"ollama"` backend) remains available for cases
 that need a generative model's broader judgment and can tolerate its
