@@ -96,7 +96,7 @@ estimate against a hardcoded $3/M rate, not a real invoice (see
 **Technical Privacy & Latency Findings**
 * **Zero Privacy Leaks & Perfect Restoration**: Across all 360 runs, `tonst` achieved **100.0% recall on structured PII fields** with zero unredacted values reaching the API endpoint and zero round-trip placeholder restoration failures.
 * **Free-Text PII Sensitivity**: `redaction_backend="gliner"` + `gemma3:1b` compression together caught **87.78%** of free-text PII overall (77.04% supervised / 98.52% unsupervised) — up from a 57.50% regex-only baseline (the number this table showed before GLiNER was wired in; still the right comparison for "what does enabling an enhanced backend actually buy you"). The residual gap is the known, accepted GLiNER limitation on the two "supervised" prompt shapes specifically (codename recall ~58-60% there, see "Why enhanced redaction matters" above) — not a bug, and not something regex-only redaction could have caught at all.
-* **Local Latency Overhead**: Running local GLiNER redaction + `gemma3:1b` compression adds a mean local processing delay of 2,258.3 ms before API dispatch (p50: 2,022.8 ms, p90: 4,031.7 ms, p99: 5,213.7 ms) — measured on a Google Colab T4 instance, where GLiNER itself ran on CPU (this step doesn't use the GPU; see "Why enhanced redaction matters" above for a second measurement from different hardware that came out meaningfully faster). A separate `--workers 4` run of this same pipeline confirmed correctness holds under concurrency (identical recall/leak/restoration numbers) but is NOT free on latency — see `research/gliner-sanity-check-findings.md` for the full breakdown.
+* **Local Latency Overhead**: Running local GLiNER redaction + `gemma3:1b` compression adds a mean local processing delay of 2,258.3-2,389.8 ms before API dispatch across two independent 360-iteration Colab runs (p50: 2,022.8-2,089.1 ms, p90: 4,031.7-4,380.1 ms, p99: 5,213.7-5,624.5 ms) — measured on a Google Colab T4 instance, where GLiNER itself ran on CPU (this step doesn't use the GPU; see "Why enhanced redaction matters" above for a second measurement from different hardware that came out meaningfully faster). Token, recall, leak, and restoration numbers were bit-for-bit identical across both runs — only latency varied, consistent with shared-cloud-instance noise rather than any code change. A separate `--workers 4` run of this same pipeline (also replicated twice) confirmed correctness holds under concurrency (identical recall/leak/restoration numbers on every run) but is NOT free on latency — see `research/gliner-sanity-check-findings.md` for the full breakdown.
 
 ---
 
@@ -421,22 +421,25 @@ caught reliably; one that doesn't — e.g. "Study NEURO-Vanguard",
 per-run numbers, and the threshold/label-wording experiments that ruled
 out cheaper fixes are in `research/gliner-sanity-check-findings.md`.
 
-GLiNER's own absolute latency turned out to be hardware-dependent, not
-a fixed number: the same `gliner_medium` model averaged ~269ms per call
-on the Mac's Apple Silicon CPU vs. ~1.3s on Colab's CPU (`gliner_redact.py`
-doesn't move the model onto CUDA, so the T4 GPU sitting alongside it on
-Colab isn't actually used for this step — both runs were CPU-bound).
-Budget from a measurement on your actual target hardware rather than
-either number in isolation.
+GLiNER's own absolute latency turned out to be hardware- and even
+session-dependent, not a fixed number: the same `gliner_medium` model
+averaged ~269ms per call on the Mac's Apple Silicon CPU vs. 1,308ms and
+1,438ms on two independent Colab sessions (`gliner_redact.py` doesn't
+move the model onto CUDA, so the T4 GPU sitting alongside it on Colab
+isn't actually used for this step -- both runs were CPU-bound, and
+Colab's shared virtual CPU is both slower and more variable than Apple
+Silicon for this workload). Budget from a measurement on your actual
+target hardware rather than any single number in isolation.
 
 A `--workers 4` (production-default) run of the same full pipeline on
-Colab confirmed correctness holds under concurrency — identical
-recall/leak/restoration-failure numbers to the `--workers 1` run,
-settling the question `research/gliner-sanity-check-findings.md` had
-flagged as open. It is **not** free on latency, though: both redaction
-and compression slowed down substantially under 4-way contention (mean
-redaction latency roughly tripled, with about 14% of calls landing
-within 250ms of the harness's timeout-tracking threshold) — correct,
+Colab -- replicated twice -- confirmed correctness holds under
+concurrency -- identical recall/leak/restoration-failure numbers to
+the `--workers 1` run on every run, settling the question
+`research/gliner-sanity-check-findings.md` had flagged as open. It is
+**not** free on latency, though: both redaction and compression slowed
+down substantially under 4-way contention (mean redaction latency rose
+3.2-3.4x across the two runs, with 13.9% of calls landing within 250ms
+of the harness's timeout-tracking threshold, both times) -- correct,
 but not the naive 4x throughput speedup one might expect. Full numbers
 in the research doc.
 
@@ -571,6 +574,19 @@ that prefix is read from cache at 10% of the base input price.
 `CacheUsageReport.estimated_cost_savings_percent(model)` computes this
 — a true cost estimate using Anthropic's published cache pricing
 multipliers, not a token-count proxy for it.
+
+**Reconfirmed with redaction in the loop (2026-09-13,
+`tonst_gliner_full_benchmark.ipynb`).** The standalone test above
+exercises caching alone; a second real-API run combined it with GLiNER
+redaction on a 1,418-token reference document containing five real PII
+fields (two names, an employer, an email, a project codename). GLiNER
+caught all five before the request was built. Call 1 (write): 1,417
+tokens processed, `cache_creation_input_tokens=1336`. Call 2 (read),
+identical prefix: `cache_read_input_tokens=1336` (94.3% of that call's
+input served from cache) for a **+84.9%** cost saving. A final
+assertion confirmed none of the five raw PII values reached the actual
+request body — the redact-then-cache pipeline holds end to end against
+the real API, not just each half in isolation.
 
 **Gemini — confirmed against the real API on 2026-09-09**
 (`gemini-3.6-flash`, explicit `CachedContent` path, billing enabled, a
