@@ -37,6 +37,14 @@ turns, `TonstClient.query_messages()` caps history to a sliding window
 and, optionally, condenses what falls outside it into a summary instead
 of dropping it outright — see "History compaction" below.
 
+## Whitepaper
+
+A full technical whitepaper — methodology, benchmarks, and real measured
+cost/privacy results — is available:
+
+- **Live version:** [Beyond the Prompt](https://claude.ai/code/artifact/0dc4a7b5-37f6-469b-bda8-0a1843b384f5)
+- **Permanent citable record (DOI):** [10.5281/zenodo.22745267](https://doi.org/10.5281/zenodo.22745267)
+
 ## Real results (not simulated)
 
 Across **384 live API benchmark iterations** spanning 6 enterprise verticals (Medical, Space, Electronics, Finance, IT, Legal), `tonst` cuts prompt payload volume by **up to 23.68% locally** (running the full pipeline: GLiNER redaction + mechanical trim + compression) and drives a **53.00% net reduction in API cost** via provider prompt caching—all while maintaining **100.0% structured PII recall with zero privacy leaks**.
