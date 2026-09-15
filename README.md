@@ -43,7 +43,7 @@ A full technical whitepaper — methodology, benchmarks, and real measured
 cost/privacy results — is available:
 
 - **Live version:** [Beyond the Prompt](https://claude.ai/code/artifact/0dc4a7b5-37f6-469b-bda8-0a1843b384f5)
-- **Permanent citable record (DOI):** [10.5281/zenodo.22745267](https://doi.org/10.5281/zenodo.22745267)
+- **Permanent citable record (DOI):** [10.5281/zenodo.22745266](https://doi.org/10.5281/zenodo.22745266)
 
 ## Real results (not simulated)
 
