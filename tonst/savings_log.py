@@ -146,6 +146,14 @@ class SavingsLog:
             entry["estimated_cost_saved_usd"] = round(
                 report.tokens_saved / 1_000_000 * input_price_per_million, 8
             )
+        pp = getattr(report, "provider_prompt_tokens", None)
+        if usage is None and pp is not None:
+            # From TonstClient(messages_fn=...) returning (text, usage): real prompt/cached counts.
+            entry["provider_usage"] = {
+                "input_tokens": pp, "output_tokens": 0,
+                "cache_read_input_tokens": getattr(report, "provider_cached_tokens", 0) or 0,
+                "cache_creation_input_tokens": 0,
+            }
         if usage is not None:
             entry["provider_usage"] = {
                 "input_tokens": usage.input_tokens,

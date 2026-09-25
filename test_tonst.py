@@ -2292,6 +2292,112 @@ def test_cache_aware_folds_when_the_provider_is_not_actually_caching():
     assert r.summary_updated and not r.fold_postponed_for_cache      # the same chat with hits postpones (above)
 
 
+
+# ---------------------------------------------------------------------
+# messages_fn: chat apps keep roles; provider adapters
+# ---------------------------------------------------------------------
+
+from tonst.adapters import (to_anthropic, to_openai, to_gemini,
+                            usage_from_anthropic, usage_from_openai, usage_from_gemini)
+
+
+def test_client_needs_a_call_function():
+    with pytest.raises(ValueError):
+        TonstClient()
+
+
+def test_messages_fn_gets_redacted_roles_and_restores_pii():
+    seen = []
+
+    def fake(messages):
+        seen.append(messages)
+        email_ph = next(tok for tok in messages[-1]["content"].split() if tok.startswith("[[EMAIL_"))
+        return f"I'll write to {email_ph}", {"prompt_tokens": 120, "cached_tokens": 100}
+
+    client = TonstClient(messages_fn=fake)
+    msgs = [{"role": "system", "content": "You are support."},
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "Email me at jo@example.com please"}]
+    text, report = client.query_messages(msgs)
+    sent = seen[0]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user"]   # roles kept, not flattened
+    assert "jo@example.com" not in str(sent)
+    assert text == "I'll write to jo@example.com"                                  # placeholder restored
+    assert report.provider_prompt_tokens == 120 and report.provider_cached_tokens == 100
+    assert report.redacted_fields == 1 and report.original_tokens > 0
+
+
+def test_messages_fn_feeds_cache_hit_rate_to_rolling_state():
+    calls = {"n": 0}
+
+    def fake(messages):
+        calls["n"] += 1
+        prompt = 1000 * calls["n"]
+        return "ok", {"prompt_tokens": prompt, "cached_tokens": 0}   # provider isn't caching at all
+
+    client = TonstClient(messages_fn=fake)
+    state = RollingSummary()
+    history = [{"role": "system", "content": "sys"}]
+    for i in range(4):
+        history.append({"role": "user", "content": f"q{i}"})
+        client.query_messages(history, rolling_state=state)
+        history.append({"role": "assistant", "content": f"a{i}"})
+    assert state.cache_hit_rate == 0.0
+
+
+def test_query_works_with_messages_fn_only():
+    got = []
+    client = TonstClient(messages_fn=lambda m: got.append(m) or "fine")
+    text, report = client.query("call me on jo@example.com")
+    assert text == "fine" and got[0][0]["role"] == "user" and "jo@example.com" not in got[0][0]["content"]
+    assert report.provider_prompt_tokens is None
+
+
+def test_savings_log_records_provider_usage_from_messages_fn(tmp_path):
+    log = tmp_path / "s.jsonl"
+    client = TonstClient(messages_fn=lambda m: ("ok", {"prompt_tokens": 50, "cached_tokens": 40}), savings_log=str(log))
+    client.query_messages([{"role": "user", "content": "hello"}])
+    entry = _json_mod.loads(log.read_text().splitlines()[0])
+    assert entry["provider_usage"]["input_tokens"] == 50 and entry["provider_usage"]["cache_read_input_tokens"] == 40
+
+
+def test_to_anthropic_merges_roles_and_places_cache_breakpoints():
+    body = to_anthropic([{"role": "system", "content": "S"},
+                         {"role": "user", "content": "[Summary of earlier conversation] ..."},
+                         {"role": "user", "content": "next question"}])
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert len(body["messages"]) == 1 and len(body["messages"][0]["content"]) == 2   # merged user turns
+    assert body["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in to_anthropic([{"role": "user", "content": "x"}], cache=False)["messages"][0]["content"][0]
+    starts_with_assistant = to_anthropic([{"role": "assistant", "content": "hi"}, {"role": "user", "content": "yo"}])
+    assert starts_with_assistant["messages"][0]["role"] == "user"
+
+
+def test_to_gemini_and_to_openai_shapes():
+    msgs = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    g = to_gemini(msgs)
+    assert g["systemInstruction"] == {"parts": [{"text": "S"}]}
+    assert [c["role"] for c in g["contents"]] == ["user", "model"]
+    assert to_openai(msgs) == msgs
+
+
+def test_usage_adapters_accept_dicts_and_sdk_objects():
+    class Obj:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+    anth = Obj(usage=Obj(input_tokens=3, cache_creation_input_tokens=7, cache_read_input_tokens=90))
+    assert usage_from_anthropic(anth) == {"prompt_tokens": 100, "cached_tokens": 90}
+    assert usage_from_openai({"usage": {"prompt_tokens": 80, "prompt_tokens_details": {"cached_tokens": 64}}}) == \
+        {"prompt_tokens": 80, "cached_tokens": 64}
+    assert usage_from_openai({"usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 0}}}) == \
+        {"prompt_tokens": 10, "cached_tokens": 0}
+    assert usage_from_gemini({"usageMetadata": {"promptTokenCount": 5000, "cachedContentTokenCount": 4096}}) == \
+        {"prompt_tokens": 5000, "cached_tokens": 4096}
+    assert usage_from_gemini({"usageMetadata": {"promptTokenCount": 10}}) == {"prompt_tokens": 10, "cached_tokens": 0}
+    assert usage_from_anthropic({}) is None
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

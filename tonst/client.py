@@ -115,6 +115,11 @@ class OptimizationReport:
     # confidently -- only duplicates were removed.
     chunk_filter_skipped: bool = False
 
+    # The provider's own numbers, when messages_fn returned (text, usage):
+    # prompt tokens billed and how many of them came from its cache.
+    provider_prompt_tokens: Optional[int] = None
+    provider_cached_tokens: Optional[int] = None
+
     # True only when BOTH original_tokens and sent_tokens came from a real
     # tokenizer (token_counter=...), not the chars/4 estimate.
     token_counts_exact: bool = False
@@ -185,7 +190,7 @@ class StructuredRedactionResult:
 class TonstClient:
     def __init__(
         self,
-        call_fn: Callable[[str], str],
+        call_fn: Optional[Callable[[str], str]] = None,
         use_local_compression: bool = False,
         use_enhanced_redaction: bool = False,
         use_history_compaction: bool = False,
@@ -205,8 +210,25 @@ class TonstClient:
         app_name: Optional[str] = None,
         input_price_per_million: Optional[float] = None,
         token_counter: Optional[Callable[[str], Optional[int]]] = None,
+        messages_fn: Optional[Callable[[list], object]] = None,
     ):
         """
+        call_fn / messages_fn -- how tonst calls YOUR model. Pass at least one.
+          - call_fn(prompt: str) -> str: the simplest shape. Every query_*
+            method flattens its input to one string for it.
+          - messages_fn(messages: list[dict]) -> str | (str, usage): gets
+            the final, redacted {"role", "content"} list -- system
+            messages included -- so a chat app keeps its roles and can put
+            prompt-caching markers on the request itself (see
+            tonst.adapters: to_anthropic / to_openai / to_gemini). It may
+            return (text, usage) with usage = {"prompt_tokens": N,
+            "cached_tokens": M} (tonst.adapters.usage_from_anthropic /
+            _openai / _gemini build it); tonst then records the provider's
+            real numbers on the report and, with a RollingSummary, feeds
+            the observed cache hit rate to cache-aware compaction.
+            query_messages() uses it directly; query() / query_structured()
+            / query_rag() send it one user message.
+
         redaction_backend lets a caller choose what catches free-text PII
         (names, addresses, employers, codenames) beyond the always-on...
         actually, beyond regex, which is NOT always-on anymore either --
@@ -319,7 +341,10 @@ class TonstClient:
         input_price_per_million adds an ESTIMATED dollar figure (tokens
         saved x that price). Summarize with `tonst stats`.
         """
+        if call_fn is None and messages_fn is None:
+            raise ValueError("TonstClient needs call_fn (prompt -> text) or messages_fn (messages -> text)")
         self.call_fn = call_fn
+        self.messages_fn = messages_fn
         self.use_local_compression = use_local_compression
         self.compressor: Optional[LocalCompressor] = (
             LocalCompressor(model=compression_model or local_model) if use_local_compression else None
@@ -452,6 +477,12 @@ class TonstClient:
         secondary = self.llm_redactor if self.redaction_backend == "ollama" else self.gliner_redactor
         return redact_with_llm(text, secondary)
 
+    def _call_text(self, prompt: str) -> tuple:
+        """Send one flat prompt: call_fn if given, else one user message to messages_fn."""
+        if self.call_fn is not None:
+            return self.call_fn(prompt), None
+        return _split_response(self.messages_fn([{"role": "user", "content": prompt}]))
+
     def query(self, prompt: str) -> tuple[str, OptimizationReport]:
         final_response, report = self._run(prompt)
         self._log(report, "query")
@@ -498,7 +529,7 @@ class TonstClient:
         #    text. call_ms is the network + model time, not tonst's own
         #    overhead; compare it against local_overhead_ms on the
         #    report to see the split.
-        raw_response = self.call_fn(trimmed)
+        raw_response, provider_usage = self._call_text(trimmed)
         t4 = time.perf_counter()
 
         # 5. Put real values back for the end user/app.
@@ -519,6 +550,7 @@ class TonstClient:
             counting_ms=orig_ms + sent_ms,
             token_counts_exact=orig_exact and sent_exact,
             total_ms=(t5 - t_start) * 1000,
+            **_usage_fields(provider_usage),
         )
         return final_response, report
 
@@ -603,6 +635,43 @@ class TonstClient:
             return 0.0
         # Main model price unknown: assume Sonnet-class ($3/M input).
         return float(price) / float(self.input_price_per_million or 3.0)
+
+    def _run_messages(self, messages: list, rolling_state: Optional[RollingSummary]) -> tuple:
+        """
+        messages_fn path of query_messages(): messages are already redacted
+        and compacted. Each message gets the same mechanical trim as query()
+        (deterministic, so a cached prefix stays byte-identical); local
+        compression is not applied to conversations.
+        """
+        t0 = time.perf_counter()
+        trimmed = [
+            {**m, "content": mechanical_trim(m["content"])} if isinstance(m.get("content"), str) and m.get("content")
+            else m
+            for m in messages
+        ]
+        t1 = time.perf_counter()
+        sent_tokens, sent_exact, sent_ms = self._count(flatten_messages(trimmed))
+        t2 = time.perf_counter()
+        raw_response, provider_usage = _split_response(self.messages_fn(trimmed))
+        t3 = time.perf_counter()
+        if rolling_state is not None and provider_usage:
+            p, c = provider_usage.get("prompt_tokens"), provider_usage.get("cached_tokens")
+            if p:
+                rolling_state.observe_cache_usage(int(p), int(c or 0))
+        report = OptimizationReport(
+            original_tokens=0,  # set by query_messages()
+            sent_tokens=sent_tokens,
+            redacted_fields=0,
+            locally_compressed=False,
+            used_enhanced_redaction=self.use_enhanced_redaction,
+            trim_ms=(t1 - t0) * 1000,
+            counting_ms=sent_ms,
+            call_ms=(t3 - t2) * 1000,
+            token_counts_exact=sent_exact,
+            total_ms=(t3 - t0) * 1000,
+            **_usage_fields(provider_usage),
+        )
+        return raw_response, report
 
     def query_messages(
         self,
@@ -743,8 +812,11 @@ class TonstClient:
             # Redacted history only -- a remote counter must never see raw PII.
             original_tokens, orig_exact, orig_ms = self._count(flatten_messages(redacted_messages))
 
-        flat_prompt = flatten_messages(compacted_messages)
-        final_response, report = self._run(flat_prompt)
+        if self.messages_fn is not None:
+            final_response, report = self._run_messages(compacted_messages, rolling_state)
+        else:
+            flat_prompt = flatten_messages(compacted_messages)
+            final_response, report = self._run(flat_prompt)
 
         # final_response was restored against _run()'s OWN mapping,
         # which is empty (flat_prompt was already redacted, so its
@@ -854,3 +926,20 @@ class TonstClient:
         )
         self._log(report, "query_rag")
         return final_response, report
+
+
+def _split_response(result) -> tuple:
+    """messages_fn may return text, or (text, usage dict)."""
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], (dict, type(None))):
+        return result[0], result[1]
+    return result, None
+
+
+def _usage_fields(usage: Optional[dict]) -> dict:
+    if not usage:
+        return {}
+    p, c = usage.get("prompt_tokens"), usage.get("cached_tokens")
+    return {
+        "provider_prompt_tokens": int(p) if p is not None else None,
+        "provider_cached_tokens": int(c) if c is not None else None,
+    }

@@ -33,6 +33,7 @@ from .token_count import AnthropicTokenCounter, GeminiTokenCounter
 from .summarizers import AnthropicSummarizer, GeminiSummarizer
 from .savings_log import SavingsLog, summarize as summarize_savings, SavingsSummary
 from . import providers
+from . import adapters
 
 __all__ = [
     "TonstClient",
@@ -71,4 +72,5 @@ __all__ = [
     "summarize_savings",
     "SavingsSummary",
     "providers",
+    "adapters",
 ]
