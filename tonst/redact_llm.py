@@ -45,6 +45,8 @@ from typing import Callable, Optional
 
 import requests
 
+from .ollama_util import fits_context, num_ctx_for
+
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 # Diagnostic only -- never affects behavior. Enable with
@@ -113,6 +115,14 @@ def _placeholder_for(label: str, span: str) -> str:
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
     t0 = time.perf_counter()
+    if not fits_context(prompt, 300):
+        # Ollama would drop the START of the prompt, so PII there would never
+        # be checked by this pass. Regex redaction (and any other backend)
+        # still ran on the full text; this only affects the free-text pass.
+        logger.warning(
+            "redact_llm: prompt too long for the local model's context window -- the start of the "
+            "text will NOT be checked for free-text PII. Split long inputs or raise TONST_OLLAMA_MAX_CTX."
+        )
     try:
         resp = _SESSION.post(
             DEFAULT_OLLAMA_URL,
@@ -134,7 +144,7 @@ def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[st
                 # against a real risk of silently losing entity detection on a
                 # legitimately busy case. temperature=0 is kept (no such
                 # trade-off: verified cost-free in the 2026-09-13 diagnostic).
-                "options": {"temperature": 0.0, "num_predict": 300},
+                "options": {"temperature": 0.0, "num_predict": 300, "num_ctx": num_ctx_for(prompt, 300)},
             },
             timeout=timeout,
         )

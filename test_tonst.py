@@ -1059,6 +1059,1239 @@ def test_azure_ptu_m_preset_reflects_full_discount():
     assert savings == pytest.approx(80.0)  # 800 of 1000 tokens at 100% off = 80% total savings
 
 
+
+# ---------------------------------------------------------------------
+# relevance.py -- shared lexical scoring
+# ---------------------------------------------------------------------
+
+from tonst.relevance import tokenize, bm25_scores, shingles, jaccard
+
+
+def test_tokenize_splits_camel_and_snake_case_and_folds_plurals():
+    assert tokenize("searchIssues") == ["search", "issue"]
+    assert tokenize("list_open_pull_requests") == ["list", "open", "pull", "request"]
+    assert "the" not in tokenize("the weather")
+
+
+def test_bm25_ranks_matching_document_first_and_zero_when_no_overlap():
+    docs = ["get current weather for a city", "send an email to a contact", "create a calendar event"]
+    scores = bm25_scores("what's the weather in Pune", docs)
+    assert scores[0] > 0 and scores[0] == max(scores)
+    assert bm25_scores("zzz qqq", docs) == [0.0, 0.0, 0.0]
+
+
+def test_jaccard_near_duplicate_detection():
+    a = shingles("The refund window is thirty days from the date of purchase for all items.")
+    b = shingles("The refund window is thirty days from the date of purchase for all items!")
+    c = shingles("Shipping to Canada takes five to seven business days via ground.")
+    assert jaccard(a, b) > 0.8
+    assert jaccard(a, c) < 0.1
+
+
+# ---------------------------------------------------------------------
+# tool_optimizer.py
+# ---------------------------------------------------------------------
+
+from tonst.tool_optimizer import (
+    select_tools,
+    ToolSession,
+    build_anthropic_deferred_tools,
+    estimate_tool_tokens,
+    loaded_tools,
+    TOOL_SEARCH_BM25,
+)
+
+
+def _anthropic_tools():
+    def t(name, desc, **props):
+        return {
+            "name": name,
+            "description": desc,
+            "input_schema": {"type": "object", "properties": {k: {"type": "string", "description": v} for k, v in props.items()}},
+        }
+    return [
+        t("get_weather", "Get the current weather forecast for a location", location="City name"),
+        t("send_email", "Send an email message to a recipient", to="Recipient address", body="Message body"),
+        t("create_calendar_event", "Create a calendar event with a title and time", title="Event title"),
+        t("search_issues", "Search GitHub issues in a repository", repo="Repository owner/name"),
+        t("create_pull_request", "Open a pull request on GitHub", repo="Repository owner/name"),
+        t("query_database", "Run a read-only SQL query against the analytics database", sql="SQL text"),
+        t("read_file", "Read a file from the workspace", path="File path"),
+        t("translate_text", "Translate text into another language", text="Text to translate"),
+    ]
+
+
+def test_select_tools_keeps_relevant_tools_in_original_order():
+    tools = _anthropic_tools()
+    sel = select_tools(tools, "find open GitHub issues about login in the tonst repository", top_k=2)
+    assert sel.selected_names == ["search_issues", "create_pull_request"]  # original order, not score order
+    assert "send_email" in sel.dropped_names
+    assert sel.tools[0] is tools[3]  # original objects, untouched
+    assert sel.tokens_after < sel.tokens_before
+    assert not sel.fell_back
+
+
+def test_select_tools_openai_format_supported():
+    tools = [
+        {"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
+        for t in _anthropic_tools()
+    ]
+    sel = select_tools(tools, "what's the weather forecast in Pune", top_k=1)
+    assert sel.selected_names == ["get_weather"]
+
+
+def test_select_tools_keeps_everything_when_nothing_matches():
+    tools = _anthropic_tools()
+    sel = select_tools(tools, "zxqv blorp", top_k=2)
+    assert sel.fell_back
+    assert len(sel.tools) == len(tools)
+    assert sel.tokens_saved == 0
+
+
+def test_select_tools_pins_always_include_and_never_drops_server_tools():
+    tools = _anthropic_tools() + [{"type": "web_search_20250305", "name": "web_search"}]
+    sel = select_tools(tools, "weather forecast", top_k=1, always_include=["read_file"])
+    assert set(sel.selected_names) == {"get_weather", "read_file", "web_search"}
+
+
+def test_select_tools_falls_back_on_one_word_coincidence():
+    # One shared word ("message") is too weak to trust: in the benchmark,
+    # every wrong pick looked like this.
+    tools = _anthropic_tools()
+    sel = select_tools(tools, "ping the team with a quick message", top_k=2)
+    assert sel.fell_back and len(sel.tools) == len(tools)
+    # ...unless the caller explicitly accepts single-word matches.
+    assert not select_tools(tools, "ping the team with a quick message", top_k=2, min_matched_terms=1).fell_back
+
+
+def test_tool_session_ignores_one_word_matches_when_growing():
+    session = ToolSession(_anthropic_tools(), top_k=2)
+    session.select("search GitHub issues in the repository")
+    sel = session.select("and the email?")  # one shared word only
+    assert sel.changed is False
+
+
+def test_select_tools_rejects_unknown_pinned_name():
+    with pytest.raises(ValueError):
+        select_tools(_anthropic_tools(), "weather", always_include=["no_such_tool"])
+
+
+def test_select_tools_is_a_no_op_under_top_k():
+    tools = _anthropic_tools()
+    sel = select_tools(tools, "weather", top_k=20)
+    assert sel.tools == tools and sel.dropped_names == []
+
+
+def test_tool_session_is_grow_only_and_cache_stable():
+    import json
+    session = ToolSession(_anthropic_tools(), top_k=2)
+    first = session.select("search GitHub issues in the repository")
+    second = session.select("thanks, can you look at the second one")  # matches nothing new
+    assert second.changed is False
+    assert json.dumps(second.tools) == json.dumps(first.tools)  # byte-identical -> cache keeps hitting
+    third = session.select("now send an email with the summary to the team")
+    assert third.changed and "send_email" in third.added_names
+    assert set(first.selected_names) <= set(third.selected_names)  # never shrinks
+    names = [t["name"] for t in _anthropic_tools()]
+    assert third.selected_names == [n for n in names if n in third.selected_names]  # original order kept
+
+
+def test_tool_session_state_round_trip():
+    s1 = ToolSession(_anthropic_tools(), top_k=2)
+    s1.select("weather forecast")
+    s2 = ToolSession(_anthropic_tools(), top_k=2).load_state(s1.to_dict())
+    assert s2.select("anything").selected_names == s1.select("anything").selected_names
+
+
+def test_build_anthropic_deferred_tools_shape():
+    tools = _anthropic_tools()
+    out = build_anthropic_deferred_tools(tools, always_loaded=["read_file"], keep_search_tools_loaded=False)
+    assert out[0] == TOOL_SEARCH_BM25
+    assert "defer_loading" not in out[0]  # never defer the search tool
+    by_name = {t["name"]: t for t in out}
+    assert by_name["get_weather"]["defer_loading"] is True
+    assert "defer_loading" not in by_name["read_file"]
+    assert "defer_loading" not in tools[0]  # input not mutated
+    assert [t["name"] for t in loaded_tools(out)] == ["tool_search_tool_bm25", "read_file"]
+
+
+def test_build_anthropic_deferred_tools_mcp_toolset_and_no_duplicate_search_tool():
+    tools = [
+        {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        {"type": "mcp_toolset", "mcp_server_name": "github"},
+    ]
+    out = build_anthropic_deferred_tools(tools)
+    assert len(out) == 2
+    assert out[1]["default_config"]["defer_loading"] is True
+
+
+def test_build_anthropic_deferred_tools_rejects_cache_control_on_deferred_tool():
+    tools = _anthropic_tools()
+    tools[0] = {**tools[0], "cache_control": {"type": "ephemeral"}}
+    with pytest.raises(ValueError):
+        build_anthropic_deferred_tools(tools)
+    # ...but pinning that tool makes it legal.
+    build_anthropic_deferred_tools(tools, always_loaded=["get_weather"])
+
+
+def test_build_anthropic_cache_request_includes_tools_and_caches_them():
+    tools = _anthropic_tools()
+    parts = PromptParts(stable_blocks=["x " * 3000], variable="Q?")
+    body = build_anthropic_cache_request(parts, model="claude-sonnet-4-6", tools=tools)
+    assert [t["name"] for t in body["tools"]] == [t["name"] for t in tools]
+    assert body["tools"][-1]["cache_control"]["type"] == "ephemeral"  # no system -> breakpoint on last tool
+    assert "cache_control" not in tools[-1]  # caller's list not mutated
+
+    with_system = build_anthropic_cache_request(PromptParts(system="sys", stable_blocks=["x " * 3000], variable="Q"),
+                                                model="claude-sonnet-4-6", tools=tools)
+    assert not any("cache_control" in t for t in with_system["tools"])  # system breakpoint already covers tools
+
+
+def test_build_anthropic_cache_request_breakpoint_skips_deferred_tools():
+    deferred = build_anthropic_deferred_tools(_anthropic_tools(), always_loaded=["get_weather"],
+                                              keep_search_tools_loaded=False)
+    body = build_anthropic_cache_request(PromptParts(stable_blocks=["x " * 3000], variable="Q"),
+                                         model="claude-sonnet-4-6", tools=deferred)
+    marked = [t["name"] for t in body["tools"] if "cache_control" in t]
+    assert marked == ["get_weather"]
+
+
+def test_cache_eligibility_counts_loaded_tools_only():
+    parts = PromptParts(system="short")
+    big_tool = {"name": "t", "description": "d " * 3000, "input_schema": {}}
+    assert check_cache_eligibility(parts, "claude-sonnet-4-6", tools=[big_tool]).eligible
+    assert not check_cache_eligibility(parts, "claude-sonnet-4-6", tools=[{**big_tool, "defer_loading": True}]).eligible
+
+
+# ---------------------------------------------------------------------
+# rag.py
+# ---------------------------------------------------------------------
+
+from tonst.rag import optimize_chunks, format_context
+
+_CHUNKS = [
+    "Refunds are accepted within thirty days of purchase if the item is unused and in original packaging.",
+    "Refunds are accepted within thirty days of purchase if the item is unused and in original packaging!",
+    "refunds are accepted within thirty days of purchase if the item is unused and in original packaging.",
+    "Our headquarters moved to a new office building in 2019 with a rooftop garden.",
+    "To start a refund, open the Orders page and choose Request refund next to the item.",
+]
+
+
+def test_optimize_chunks_default_only_dedupes():
+    sel = optimize_chunks(_CHUNKS, "how do I get a refund?")
+    reasons = dict(sel.dropped)
+    assert reasons == {1: "near_duplicate", 2: "duplicate"}
+    assert sel.chunks == [_CHUNKS[0], _CHUNKS[3], _CHUNKS[4]]  # retrieval order kept, text untouched
+    assert sel.tokens_saved > 0
+
+
+def test_optimize_chunks_relevance_filter_and_top_k():
+    sel = optimize_chunks(_CHUNKS, "how do I request a refund?", top_k=2)
+    assert _CHUNKS[3] not in sel.chunks
+    assert len(sel.chunks) == 2
+    assert (3, "below_top_k") in sel.dropped
+
+
+def test_optimize_chunks_never_filters_when_nothing_matches():
+    sel = optimize_chunks(_CHUNKS, "zxqv blorp", top_k=1)
+    assert sel.fell_back
+    assert len(sel.chunks) == 3  # only the duplicates went
+
+
+def test_optimize_chunks_one_word_match_does_not_filter():
+    sel = optimize_chunks(_CHUNKS, "refund?", top_k=1)
+    assert sel.fell_back and len(sel.chunks) == 3
+
+
+def test_optimize_chunks_token_budget_and_dict_chunks():
+    chunks = [{"id": i, "text": t} for i, t in enumerate(_CHUNKS)]
+    sel = optimize_chunks(chunks, "how do I request a refund", max_tokens=30)
+    assert sel.tokens_after <= 30
+    assert all(isinstance(c, dict) for c in sel.chunks)
+    assert any(r == "over_budget" for _, r in sel.dropped)
+
+
+def test_optimize_chunks_score_order():
+    sel = optimize_chunks(_CHUNKS, "request refund orders page", top_k=2, order="score")
+    assert sel.chunks[0] == _CHUNKS[4]
+
+
+def test_format_context_is_deterministic():
+    assert format_context(["a", "b"], "q?") == "[Context 1]\na\n\n[Context 2]\nb\n\nQuestion: q?"
+
+
+def test_query_rag_end_to_end_redacts_and_reports_chunks():
+    sent = {}
+
+    def fake_call(prompt):
+        sent["prompt"] = prompt
+        return "Email [[EMAIL_" + prompt.split("[[EMAIL_")[1].split("]]")[0] + "]] for help."
+
+    chunks = _CHUNKS + ["For refund problems, email support@acme.com and quote your order number."]
+    client = TonstClient(call_fn=fake_call)
+    response, report = client.query_rag("how do I get a refund?", chunks, system="You are a support bot.")
+    assert "support@acme.com" not in sent["prompt"]
+    assert "support@acme.com" in response  # restored
+    assert sent["prompt"].startswith("You are a support bot.")
+    assert sent["prompt"].rstrip().endswith("Question: how do I get a refund?")
+    assert report.chunks_in == 6 and report.chunks_sent == 4
+    assert report.redacted_types == {"EMAIL": 1}
+    assert report.original_tokens > report.sent_tokens
+
+
+# ---------------------------------------------------------------------
+# compactor.py -- rolling compaction
+# ---------------------------------------------------------------------
+
+from tonst.compactor import compact_history_rolling, RollingSummary
+
+
+def _conv(n, size=200):
+    msgs = [{"role": "system", "content": "You are helpful."}]
+    for i in range(n):
+        msgs.append({"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i} " + "word " * size})
+    return msgs
+
+
+class _CountingCompactor:
+    """Stands in for HistoryCompactor; records calls."""
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def summarize_incremental(self, previous, new_text, max_summary_chars=4000):
+        self.calls.append((previous, new_text))
+        if self.fail:
+            return None
+        return f"Goal: v{len(self.calls)}"
+
+
+def test_rolling_keeps_evicted_turns_verbatim_until_threshold():
+    comp, state = _CountingCompactor(), RollingSummary()
+    r = compact_history_rolling(_conv(8, size=50), comp, state, keep_last_n=6, token_threshold=10_000)
+    assert comp.calls == []  # below threshold: no local-model call
+    assert r.pending_turns == 2
+    assert len(r.messages) == 1 + 8  # nothing dropped yet
+
+
+def test_rolling_folds_once_then_reuses_summary_without_model_call():
+    comp, state = _CountingCompactor(), RollingSummary()
+    msgs = _conv(10)
+    r1 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    assert r1.summary_updated and r1.folded_turns == 6 and len(comp.calls) == 1
+    assert r1.messages[1]["content"] == "[Summary of earlier conversation]\nGoal: v1"
+    assert r1.messages[2:] == msgs[7:]
+
+    # Next turn: one more message. Evicted portion is tiny -> no new call, summary reused byte-for-byte.
+    msgs2 = msgs + [{"role": "user", "content": "short follow-up"}]
+    r2 = compact_history_rolling(msgs2, comp, state, keep_last_n=4, token_threshold=500)
+    assert len(comp.calls) == 1 and r2.summary_reused and not r2.summary_updated
+    assert r2.messages[: len(r1.messages)] == r1.messages  # append-only prefix -> provider cache keeps hitting
+
+
+def test_rolling_second_fold_passes_previous_summary():
+    comp, state = _CountingCompactor(), RollingSummary()
+    msgs = _conv(10)
+    compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    msgs += [{"role": "user", "content": "more " * 400}, {"role": "assistant", "content": "ok " * 400},
+             {"role": "user", "content": "x " * 400}, {"role": "assistant", "content": "y " * 400}]
+    r = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    assert r.summary_updated and comp.calls[-1][0] == "Goal: v1"
+    assert "turn 0 " not in comp.calls[-1][1]  # already-summarized turns are never re-sent to the model
+
+
+def test_rolling_failed_fold_keeps_turns_and_retries_before_dropping():
+    comp, state = _CountingCompactor(), RollingSummary()
+    msgs = _conv(10)
+    compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    comp.fail = True
+    msgs += [{"role": "user", "content": "a " * 1200}] * 4
+
+    # First failure: nothing is dropped -- the turns stay verbatim for a retry.
+    r1 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    assert r1.fold_failed and r1.fold_will_retry and r1.dropped_turns == 0
+    assert r1.pending_turns == 4 and state.failed_folds == 1
+    assert len(r1.messages) == 1 + 1 + 8  # system + summary + 4 pending + 4 recent
+    calls_after_first_failure = len(comp.calls)
+
+    # Not retried on the very next turn: the bar is now 2x threshold.
+    msgs2 = msgs + [{"role": "assistant", "content": "ok"}]
+    compact_history_rolling(msgs2, comp, state, keep_last_n=4, token_threshold=5000)
+    assert len(comp.calls) == calls_after_first_failure
+
+    # Second failure (past 2x threshold): now the batch is dropped, old summary kept.
+    msgs3 = msgs2 + [{"role": "user", "content": "b " * 1200}] * 2
+    r3 = compact_history_rolling(msgs3, comp, state, keep_last_n=4, token_threshold=500)
+    assert r3.fold_failed and not r3.fold_will_retry and r3.dropped_turns > 0
+    assert state.summary == "Goal: v1" and state.failed_folds == 0
+    assert r3.tokens_lost > 0 and state.dropped_tokens == r3.tokens_lost
+
+
+def test_rolling_retry_succeeds_without_losing_turns():
+    comp, state = _CountingCompactor(fail=True), RollingSummary()
+    msgs = _conv(10)
+    r1 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    assert r1.fold_will_retry and state.summary is None
+    comp.fail = False
+    msgs += [{"role": "user", "content": "c " * 1200}, {"role": "assistant", "content": "d " * 1200}]
+    r2 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500)
+    assert r2.summary_updated and r2.folded_turns == 8 and state.dropped_tokens == 0
+
+
+def test_rolling_without_compactor_is_batched_truncation():
+    state = RollingSummary()
+    r = compact_history_rolling(_conv(10), None, state, keep_last_n=4, token_threshold=500)
+    assert r.dropped_turns == 6 and state.summary is None
+    assert len(r.messages) == 1 + 4
+
+
+def test_rolling_resets_when_history_does_not_match_state():
+    comp, state = _CountingCompactor(), RollingSummary()
+    compact_history_rolling(_conv(10), comp, state, keep_last_n=4, token_threshold=500)
+    other = _conv(10, size=150)  # different conversation, same length
+    r = compact_history_rolling(other, comp, state, keep_last_n=4, token_threshold=500)
+    assert r.state_reset
+    assert comp.calls[-1][0] is None  # rebuilt from scratch, not merged into the wrong summary
+
+
+def test_rolling_state_round_trips_through_dict():
+    state = RollingSummary(summary="s", summarized_count=3, fingerprint="abc", failed_folds=1, dropped_tokens=40)
+    assert RollingSummary.from_dict(state.to_dict()) == state
+    # Older saved states (without the newer fields) still load.
+    assert RollingSummary.from_dict({"summary": "s", "summarized_count": 3}).failed_folds == 0
+
+
+def test_summarize_incremental_first_fold_uses_structured_prompt():
+    seen = {}
+
+    def fake(prompt, model, timeout):
+        seen["prompt"] = prompt
+        return ("Goal: replace damaged order\nDecisions:\n- replacement\nKey facts:\n- order [[NAME_1a2b3c4d]]"
+                "\nOpen items:\n- none")
+    comp = HistoryCompactor(model_call_fn=fake)
+    out = comp.summarize_incremental(None, "user: order for [[NAME_1a2b3c4d]] arrived damaged. " * 10)
+    assert out is not None
+    assert "Goal:" in seen["prompt"] and "(none yet)" in seen["prompt"]
+
+
+def test_client_compaction_timeout_is_configurable_and_longer_by_default():
+    client = TonstClient(call_fn=lambda p: "ok", use_history_compaction=True)
+    assert client.history_compactor.timeout == 60.0
+    client = TonstClient(call_fn=lambda p: "ok", use_history_compaction=True, compaction_timeout=15)
+    assert client.history_compactor.timeout == 15
+
+
+def test_summarize_incremental_guard_rails():
+    def fake(prompt, model, timeout):
+        return fake.out
+    comp = HistoryCompactor(model_call_fn=fake)
+    new_text = "user: I switched the deploy target to staging. " * 20
+    fake.out = "Goal: deploy\nDecisions: target is staging\nKey facts: staging cluster\nOpen items: none"
+    assert comp.summarize_incremental("Goal: deploy", new_text) == fake.out
+    fake.out = "x" * 5000  # too long / grew too much
+    assert comp.summarize_incremental("Goal: deploy", new_text) is None
+    fake.out = "Goal: email [[EMAIL_deadbeef]] about it\nDecisions: -\nKey facts: deploy to staging\nOpen items: -"  # invented placeholder
+    assert comp.summarize_incremental("Goal: deploy", new_text) is None
+    fake.out = "Goal: keep [[NAME_1a2b3c4d]]\nDecisions: -\nKey facts: deploy to staging\nOpen items: -"  # placeholder only in the OLD summary is fine
+    assert comp.summarize_incremental("Goal: talk to [[NAME_1a2b3c4d]]", new_text) == fake.out
+
+
+def test_query_messages_rolling_state_end_to_end():
+    prompts = []
+    client = TonstClient(call_fn=lambda p: prompts.append(p) or "ok", compaction_token_threshold=300)
+    client.history_compactor = _CountingCompactor()
+    state = RollingSummary()
+    msgs = _conv(10) + [{"role": "user", "content": "My email is jo@example.com"}]
+    _, report = client.query_messages(msgs, keep_last_n=4, rolling_state=state)
+    assert report.history_summary_updated and report.history_compacted
+    assert "jo@example.com" not in prompts[-1]
+    _, report2 = client.query_messages(msgs + [{"role": "assistant", "content": "noted"}], keep_last_n=4, rolling_state=state)
+    assert report2.history_summary_reused and not report2.history_summary_updated
+    assert prompts[-1].startswith(prompts[-2][: len(prompts[-2]) // 2])  # stable prefix across turns
+
+
+# ---------------------------------------------------------------------
+# savings_log.py + `tonst stats`
+# ---------------------------------------------------------------------
+
+import json as _json_mod
+from tonst.savings_log import SavingsLog, summarize as summarize_savings, format_summary, redacted_types_from_mapping
+
+
+def test_redacted_types_reads_labels_only():
+    mapping = {"[[EMAIL_1a2b3c4d]]": "a@b.com", "[[EMAIL_99999999]]": "c@d.com", "[[CREDIT_CARD_abcdef01]]": "4111"}
+    assert redacted_types_from_mapping(mapping) == {"CREDIT_CARD": 1, "EMAIL": 2}
+
+
+def test_savings_log_never_writes_prompt_pii_or_placeholder_hashes(tmp_path):
+    log = tmp_path / "s.jsonl"
+    client = TonstClient(call_fn=lambda p: "ok", savings_log=str(log), app_name="support", input_price_per_million=3.0)
+    client.query("Contact   jane.doe@example.com   about   the    invoice,  phone 555-123-4567.")
+    raw = log.read_text()
+    assert "jane.doe" not in raw and "555-123" not in raw and "invoice" not in raw
+    assert "[[EMAIL_" not in raw  # no hashes
+    entry = _json_mod.loads(raw.strip())
+    assert entry["app"] == "support" and entry["method"] == "query"
+    assert entry["redacted_types"].get("EMAIL") == 1
+    assert entry["token_counts_are_estimates"] is True
+    assert entry["estimated_cost_saved_usd"] >= 0
+
+
+def test_savings_log_one_entry_per_public_call(tmp_path):
+    log = tmp_path / "s.jsonl"
+    client = TonstClient(call_fn=lambda p: "ok", savings_log=str(log))
+    client.query_structured(PromptParts(system="s", variable="q"))
+    client.query_messages([{"role": "user", "content": "hi"}])
+    client.query_rag("q", ["a chunk"])
+    methods = [_json_mod.loads(l)["method"] for l in log.read_text().splitlines()]
+    assert methods == ["query_structured", "query_messages", "query_rag"]
+
+
+def test_savings_log_off_by_default_and_fails_soft(tmp_path):
+    assert TonstClient(call_fn=lambda p: "ok").savings_log is None
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")
+    client = TonstClient(call_fn=lambda p: "ok", savings_log=str(blocker / "s.jsonl"))
+    response, _ = client.query("hello")  # unwritable path must not break the call
+    assert response == "ok"
+
+
+def test_summarize_and_format(tmp_path):
+    log = tmp_path / "s.jsonl"
+    a = TonstClient(call_fn=lambda p: "ok", savings_log=str(log), app_name="a", input_price_per_million=3.0)
+    b = TonstClient(call_fn=lambda p: "ok", savings_log=str(log), app_name="b")
+    a.query("x   " * 200 + " mail me at a@b.com")
+    b.query("line\nline\nline\n" * 50)
+    with open(log, "a") as f:
+        f.write("not json\n")  # corrupt line is skipped, not fatal
+    s = summarize_savings(str(log))
+    assert s.calls == 2 and s.tokens_saved > 0
+    assert set(s.by_app) == {"a", "b"}
+    assert s.calls_with_price == 1
+    assert summarize_savings(str(log), app="a").calls == 1
+    text = format_summary(s)
+    assert "tokens saved" in text and "priced on 1 of 2 calls" in text
+    assert format_summary(summarize_savings(str(tmp_path / "missing.jsonl"))) == "No tonst calls logged yet."
+
+
+def test_savings_log_records_real_provider_usage(tmp_path):
+    log = SavingsLog(str(tmp_path / "s.jsonl"))
+    _, report = TonstClient(call_fn=lambda p: "ok").query("hi")
+    usage = CacheUsageReport(input_tokens=10, output_tokens=5, cache_creation_input_tokens=0, cache_read_input_tokens=1500)
+    log.record(report, usage=usage)
+    s = summarize_savings(log.path)
+    assert s.cache_read_input_tokens == 1500 and s.calls_with_provider_usage == 1
+
+
+def test_stats_cli(tmp_path, capsys=None):
+    import io, contextlib
+    from tonst.__main__ import main as cli_main
+    log = tmp_path / "s.jsonl"
+    TonstClient(call_fn=lambda p: "ok", savings_log=str(log)).query("a  " * 100)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert cli_main(["stats", "--log", str(log), "--json"]) == 0
+    assert _json_mod.loads(buf.getvalue())["calls"] == 1
+
+
+
+# ---------------------------------------------------------------------
+# Reporting fixes found in live testing (2026-09-24)
+# ---------------------------------------------------------------------
+
+def test_query_rag_reports_when_relevance_filtering_was_skipped(tmp_path):
+    log = tmp_path / "s.jsonl"
+    client = TonstClient(call_fn=lambda p: "ok", savings_log=str(log))
+    chunks = ["Refunds take 5-10 days. Email help@acme.com.",
+              "Refunds take 5-10 days. Email help@acme.com.",
+              "Our office has a rooftop garden."]
+    # The exact case from manual testing: one-word match -> filtering skipped.
+    _, report = client.query_rag("How do refunds work?", chunks, top_k=1)
+    assert report.chunk_filter_skipped and report.chunks_sent == 2
+    # Opting into single-word matches filters as asked.
+    _, report2 = client.query_rag("How do refunds work?", chunks, top_k=1, min_matched_terms=1)
+    assert not report2.chunk_filter_skipped and report2.chunks_sent == 1
+    entries = [_json_mod.loads(l) for l in log.read_text().splitlines()]
+    assert [e["chunk_filter_skipped"] for e in entries] == [True, False]
+    assert "relevance filtering skipped on 1 calls" in format_summary(summarize_savings(str(log)))
+
+
+def test_truncated_history_is_reported_as_lost_not_just_saved(tmp_path):
+    log = tmp_path / "s.jsonl"
+    client = TonstClient(call_fn=lambda p: "ok", savings_log=str(log))  # no compactor -> pure truncation
+    history = [{"role": "user", "content": f"message {i} " * 200} for i in range(20)]
+    _, report = client.query_messages(history, rolling_state=RollingSummary())
+    assert report.history_tokens_lost > 0
+    assert report.history_tokens_lost <= report.tokens_saved
+    s = summarize_savings(str(log))
+    assert s.history_tokens_lost == report.history_tokens_lost
+    text = format_summary(s)
+    assert "of which lost" in text and "saved excl. lost history" in text
+
+
+def test_stateless_compaction_also_reports_lost_history():
+    client = TonstClient(call_fn=lambda p: "ok", compaction_token_threshold=100)
+    history = [{"role": "user", "content": f"message {i} " * 100} for i in range(12)]
+    _, report = client.query_messages(history)
+    assert report.history_turns_dropped == 6 and report.history_tokens_lost > 0
+
+
+def test_log_records_summary_updated_and_reused(tmp_path):
+    log = tmp_path / "s.jsonl"
+    client = TonstClient(call_fn=lambda p: "ok", savings_log=str(log), compaction_token_threshold=300)
+    client.history_compactor = _CountingCompactor()
+    state = RollingSummary()
+    msgs = _conv(10)
+    client.query_messages(msgs, keep_last_n=4, rolling_state=state)
+    client.query_messages(msgs + [{"role": "user", "content": "more?"}], keep_last_n=4, rolling_state=state)
+    entries = [_json_mod.loads(l) for l in log.read_text().splitlines()]
+    assert [(e["history_summary_updated"], e["history_summary_reused"]) for e in entries] == [(True, False), (False, True)]
+    assert "1 folds, 1 reuses" in format_summary(summarize_savings(str(log)))
+
+
+def test_stats_show_median_and_max_overhead_not_just_mean(tmp_path):
+    log = SavingsLog(str(tmp_path / "s.jsonl"))
+    _, fast = TonstClient(call_fn=lambda p: "ok").query("hi")
+    for ms in (2.0, 3.0, 4.0, 8000.0):  # one slow outlier, like a local-model timeout
+        log.record(__import__("dataclasses").replace(fast, redaction_ms=ms, trim_ms=0, compression_ms=0))
+    s = summarize_savings(log.path)
+    assert s.median_local_overhead_ms == 3.5
+    assert s.max_local_overhead_ms == 8000.0
+    assert "median 3.5 ms, max 8000.0 ms" in format_summary(s)
+
+
+
+# ---------------------------------------------------------------------
+# token_count.py -- optional exact counting (added after the live test
+# found real input ~1.8x the chars/4 estimate on tool calls)
+# ---------------------------------------------------------------------
+
+from tonst.token_count import AnthropicTokenCounter, COUNT_TOKENS_URL
+
+
+class _SpyCounter:
+    def __init__(self, fail=False):
+        self.seen = []
+        self.fail = fail
+
+    def __call__(self, text):
+        self.seen.append(text)
+        if self.fail:
+            raise RuntimeError("network down")
+        return len(text.split()) + 7
+
+
+def test_token_counter_never_sees_raw_pii_in_any_entry_point():
+    spy = _SpyCounter()
+    client = TonstClient(call_fn=lambda p: "ok", token_counter=spy)
+    client.query("Email jane.doe@example.com about invoice 5")
+    client.query_messages([{"role": "user", "content": "I'm at jane.doe@example.com"},
+                           {"role": "assistant", "content": "noted"}])
+    client.query_rag("refund policy for jane.doe@example.com", ["Refund policy: 30 days.", "Contact jane.doe@example.com"])
+    assert spy.seen, "counter should have been used"
+    assert not any("jane.doe@example.com" in t for t in spy.seen)
+
+
+def test_token_counter_results_are_used_and_marked_exact(tmp_path):
+    log = tmp_path / "s.jsonl"
+    spy = _SpyCounter()
+    client = TonstClient(call_fn=lambda p: "ok", token_counter=spy, savings_log=str(log))
+    _, report = client.query("one  two  two\nthree\nthree")
+    assert report.token_counts_exact
+    assert report.sent_tokens == len(spy.seen[-1].split()) + 7
+    assert report.counting_ms >= 0
+    entry = _json_mod.loads(log.read_text().splitlines()[0])
+    assert entry["token_counts_are_estimates"] is False
+    assert "(counted)" in format_summary(summarize_savings(str(log)))
+
+
+def test_token_counter_failure_falls_back_to_estimate():
+    client = TonstClient(call_fn=lambda p: "ok", token_counter=_SpyCounter(fail=True))
+    response, report = client.query("hello there")
+    assert response == "ok" and not report.token_counts_exact
+    assert report.sent_tokens == estimate_tokens("hello there")
+
+
+def test_mixed_exact_and_estimated_calls_are_labelled(tmp_path):
+    log = tmp_path / "s.jsonl"
+    TonstClient(call_fn=lambda p: "ok", token_counter=_SpyCounter(), savings_log=str(log)).query("a b c")
+    TonstClient(call_fn=lambda p: "ok", savings_log=str(log)).query("a b c")
+    assert "counted on 1 of 2 calls, rest estimated" in format_summary(summarize_savings(str(log)))
+
+
+def test_anthropic_token_counter_requests_and_tool_overhead():
+    calls = []
+
+    def fake_post(url, headers, body, timeout):
+        calls.append((url, headers, body))
+        return {"input_tokens": 10 + (500 if body.get("tools") else 0) + 3 * len(body.get("tools") or [])}
+
+    c = AnthropicTokenCounter(model="claude-sonnet-4-6", api_key="k", post_fn=fake_post)
+    assert c("hello") == 10
+    url, headers, body = calls[-1]
+    assert url == COUNT_TOKENS_URL and headers["x-api-key"] == "k" and body["model"] == "claude-sonnet-4-6"
+    tools = _anthropic_tools()
+    assert c.count_tools(tools) == 500 + 3 * len(tools)  # with-tools minus base: includes the hidden tool prompt
+    n_calls = len(calls)
+    c.count_tools(tools[:2])
+    assert len(calls) == n_calls + 1  # base count is cached
+    assert c.count_tools([]) == 0
+
+
+def test_anthropic_token_counter_fails_soft():
+    def boom(url, headers, body, timeout):
+        raise ConnectionError("offline")
+    c = AnthropicTokenCounter(api_key="k", post_fn=boom)
+    assert c("hi") is None and c.count_tools(_anthropic_tools()) is None
+
+
+def test_select_tools_uses_real_counter_for_numbers_only():
+    tools = _anthropic_tools()
+    counter = lambda ts: 400 + 100 * len(ts)  # noqa: E731
+    exact = select_tools(tools, "find open GitHub issues in the repository", top_k=2, token_counter=counter)
+    estimated = select_tools(tools, "find open GitHub issues in the repository", top_k=2)
+    assert exact.selected_names == estimated.selected_names  # selection unchanged
+    assert exact.tokens_exact and (exact.tokens_before, exact.tokens_after) == (1200, 600)
+    assert not estimated.tokens_exact
+    failing = select_tools(tools, "find open GitHub issues in the repository", top_k=2, token_counter=lambda ts: None)
+    assert not failing.tokens_exact and failing.tokens_before == estimated.tokens_before
+
+
+
+def test_deferred_tools_keep_search_type_tools_loaded_by_default():
+    # Live testing: deferring slack_search_messages / docs_search made Claude search the TOOL
+    # catalog for the topic ("billing outage"), find nothing, and claim the data didn't exist.
+    from tonst.tool_optimizer import is_search_like_tool, DEFERRED_TOOLS_SYSTEM_HINT
+    tools = _anthropic_tools()
+    out = build_anthropic_deferred_tools(tools)
+    loaded = [t["name"] for t in loaded_tools(out)]
+    assert loaded == ["tool_search_tool_bm25", "search_issues"]
+    assert is_search_like_tool({"name": "logs_search", "input_schema": {}})
+    assert is_search_like_tool({"name": "slackSearchMessages", "input_schema": {}})
+    assert not is_search_like_tool({"name": "research_notes", "input_schema": {}})  # whole words only
+    assert "finds TOOLS, not data" in DEFERRED_TOOLS_SYSTEM_HINT
+    # Opting out restores defer-everything.
+    plain = build_anthropic_deferred_tools(tools, keep_search_tools_loaded=False)
+    assert [t["name"] for t in loaded_tools(plain)] == ["tool_search_tool_bm25"]
+
+
+
+def test_summaries_are_stripped_of_echoed_prompt_fences():
+    # Live testing: gemma2:2b wrapped its rolling summary in the prompt's --- fences.
+    from tonst.compactor import _clean_summary
+    raw = "---\nGoal: Replace cracked ceramic lamp\nDecisions:  Replacement\n---"
+    assert _clean_summary(raw) == "Goal: Replace cracked ceramic lamp\nDecisions:  Replacement"
+    assert _clean_summary("Updated summary:\n```\nGoal: x\n```\n") == "Goal: x"
+    assert _clean_summary("Goal: a --- b") == "Goal: a --- b"  # only whole fence lines are removed
+
+    def fake(prompt, model, timeout):
+        return "---\nGoal: deploy\nDecisions: target is staging\nKey facts: staging cluster\nOpen items: none\n---"
+    comp = HistoryCompactor(model_call_fn=fake)
+    out = comp.summarize_incremental("Goal: deploy", "user: switch the deploy target to staging. " * 20)
+    assert out == "Goal: deploy\nDecisions: target is staging\nKey facts: staging cluster\nOpen items: none"
+
+
+def test_rolling_prompt_puts_settled_items_under_decisions():
+    # Live testing: an already-agreed express upgrade was listed under Open items.
+    from tonst.compactor import ROLLING_COMPACTION_PROMPT
+    assert "Open items = ONLY things still undecided" in ROLLING_COMPACTION_PROMPT
+    assert "belongs under Decisions" in ROLLING_COMPACTION_PROMPT
+    # Live testing (24 turns): repeated bullets, and two facts linked that the chat never linked.
+    assert "merge duplicates" in ROLLING_COMPACTION_PROMPT
+    assert ROLLING_COMPACTION_PROMPT.format(summary="s", text="t")  # still a valid format string
+
+
+
+# ---------------------------------------------------------------------
+# Background summarizing (live test: a blocking summary added ~4.7 s to its turn)
+# ---------------------------------------------------------------------
+
+from tonst.compactor import run_fold_job
+
+
+def test_deferred_fold_keeps_turns_verbatim_and_applies_later():
+    comp, state = _CountingCompactor(), RollingSummary()
+    msgs = _conv(10)
+    r1 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500, defer_fold=True)
+    assert r1.fold_job is not None and comp.calls == []           # nothing ran on the request path
+    assert r1.messages[1:] == msgs[1:] and state.summary is None     # all turns still sent verbatim
+    assert state.fold_in_progress
+
+    # While the job is in flight, no second job is scheduled.
+    r2 = compact_history_rolling(msgs + [{"role": "user", "content": "x " * 900}], comp, state,
+                                 keep_last_n=4, token_threshold=500, defer_fold=True)
+    assert r2.fold_job is None
+
+    assert run_fold_job(r1.fold_job, comp, state) == "folded"
+    assert state.summary == "Goal: v1" and not state.fold_in_progress and len(comp.calls) == 1
+    r3 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500, defer_fold=True)
+    assert r3.messages[1]["content"].endswith("Goal: v1") and r3.summary_reused
+
+
+def test_stale_background_job_is_ignored():
+    comp, state = _CountingCompactor(), RollingSummary()
+    r = compact_history_rolling(_conv(10), comp, state, keep_last_n=4, token_threshold=500, defer_fold=True)
+    # The conversation changes (edited history) before the job finishes -> state resets.
+    compact_history_rolling(_conv(10, size=150), None, state, keep_last_n=4, token_threshold=10**6)
+    assert run_fold_job(r.fold_job, comp, state) == "stale"
+    assert state.summary is None and not state.fold_in_progress
+
+
+def test_background_job_failure_follows_retry_then_drop():
+    comp, state = _CountingCompactor(fail=True), RollingSummary()
+    msgs = _conv(10)
+    r = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500, defer_fold=True)
+    assert run_fold_job(r.fold_job, comp, state) == "retry" and state.failed_folds == 1
+    msgs += [{"role": "user", "content": "b " * 1200}] * 2
+    r2 = compact_history_rolling(msgs, comp, state, keep_last_n=4, token_threshold=500, defer_fold=True)
+    assert run_fold_job(r2.fold_job, comp, state) == "dropped" and state.dropped_tokens > 0
+
+    class Boom(_CountingCompactor):
+        def summarize_incremental(self, *a, **k):
+            raise RuntimeError("ollama crashed")
+    state2 = RollingSummary()
+    r3 = compact_history_rolling(_conv(10), Boom(), state2, keep_last_n=4, token_threshold=500, defer_fold=True)
+    assert run_fold_job(r3.fold_job, Boom(), state2) == "retry"   # exception handled, never raised
+    assert not state2.fold_in_progress
+
+
+def test_client_background_summary_does_not_block_the_call():
+    import time as _t
+
+    class Slow(_CountingCompactor):
+        def summarize_incremental(self, previous, new_text, max_summary_chars=4000):
+            _t.sleep(0.6)
+            return super().summarize_incremental(previous, new_text, max_summary_chars)
+
+    prompts = []
+    client = TonstClient(call_fn=lambda p: prompts.append(p) or "ok", compaction_token_threshold=300)
+    client.history_compactor = Slow()
+    state = RollingSummary()
+    msgs = _conv(10)
+
+    t0 = _t.perf_counter()
+    _, r1 = client.query_messages(msgs, keep_last_n=4, rolling_state=state, background_summary=True)
+    assert _t.perf_counter() - t0 < 0.4              # did not wait for the 0.6 s summary
+    assert r1.history_summary_scheduled and not r1.history_summary_updated
+    assert client.wait_for_background_work(timeout=5)
+    assert state.summary == "Goal: v1"
+
+    _, r2 = client.query_messages(msgs + [{"role": "user", "content": "and now?"}], keep_last_n=4,
+                                  rolling_state=state, background_summary=True)
+    assert r2.history_summary_reused and "Goal: v1" in prompts[-1]
+
+
+def test_background_summary_requires_rolling_state():
+    with pytest.raises(ValueError):
+        TonstClient(call_fn=lambda p: "ok").query_messages([{"role": "user", "content": "hi"}],
+                                                          background_summary=True)
+
+
+
+# ---------------------------------------------------------------------
+# Ollama context window (num_ctx): without it Ollama silently drops the
+# START of long prompts -- found preparing the long-history live test.
+# ---------------------------------------------------------------------
+
+class _FakeSession:
+    def __init__(self, response_text="ok summary text that is long enough"):
+        self.payloads = []
+        self.response_text = response_text
+
+    def post(self, url, json=None, timeout=None):
+        self.payloads.append(json)
+        outer = self
+
+        class R:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return {"response": outer.response_text}
+        return R()
+
+
+def test_num_ctx_is_sized_to_the_prompt():
+    from tonst.ollama_util import num_ctx_for, fits_context
+    assert num_ctx_for("x" * 300, 100) == 2048                    # never below Ollama's usual default
+    assert num_ctx_for("x" * 15000, 1200) == 7168                # 5,000 + 1,200 + 128 -> rounded up to 1k
+    assert num_ctx_for("x" * 60000, 1200) == 8192                # capped at the model maximum
+    assert fits_context("x" * 15000, 1200) and not fits_context("x" * 60000, 1200)
+
+
+def test_compactor_sends_num_ctx_and_refuses_prompts_that_would_be_truncated(monkeypatch=None):
+    import tonst.compactor as C
+    fake = _FakeSession()
+    orig = C._SESSION
+    C._SESSION = fake
+    try:
+        assert C._default_ollama_call("summarize " * 2000, "gemma2:2b", 5.0) is not None
+        opts = fake.payloads[-1]["options"]
+        assert opts["num_ctx"] >= 2048 and opts["num_predict"] <= 1200
+        n = len(fake.payloads)
+        assert C._default_ollama_call("x" * 60000, "gemma2:2b", 5.0) is None   # too long: refused, not truncated
+        assert len(fake.payloads) == n                                        # ...and never sent
+    finally:
+        C._SESSION = orig
+
+
+def test_local_compression_and_redaction_send_num_ctx():
+    import tonst.local_model as LM
+    import tonst.redact_llm as RL
+    for mod in (LM, RL):
+        fake = _FakeSession("[]")
+        orig = mod._SESSION
+        mod._SESSION = fake
+        try:
+            if mod is LM:
+                LM.LocalCompressor().compress("please compress this sentence " * 50)
+                assert LM.LocalCompressor().compress("x " * 40000) == ("x " * 40000, False)  # too long: skipped
+            else:
+                RL._default_ollama_call("find names in this text " * 50, "gemma2:2b", 5.0)
+            assert "num_ctx" in fake.payloads[0]["options"]
+        finally:
+            mod._SESSION = orig
+
+
+
+# ---------------------------------------------------------------------
+# Long-history summary failure (live, 2026-09-25): with ~3k tokens of tool
+# output, gemma2:2b replied to the customer instead of summarizing, and the
+# reply passed every other guard rail.
+# ---------------------------------------------------------------------
+
+_LIVE_GARBAGE_SUMMARY = (
+    "You're in luck!  I've sent you a tracking number.  You can find it in the \"Tracking Number\" "
+    "section of your order summary. \n\n**Here's why I'm able to help:**\n\n* **I have access to real-time "
+    "data:** I can access and process information about your order, including the courier's tracking "
+    "system. \n* **I'm trained on a massive dataset:** This allows me to understand your request and "
+    "provide you with the information you need. \n\n\nLet me know if you have any other questions!"
+)
+
+
+def test_reply_instead_of_summary_is_rejected():
+    from tonst.compactor import _has_summary_structure
+    assert not _has_summary_structure(_LIVE_GARBAGE_SUMMARY)
+    comp = HistoryCompactor(model_call_fn=lambda prompt, model, timeout: _LIVE_GARBAGE_SUMMARY)
+    long_turns = ("user: Will I get a tracking number?\nassistant: Yes. [tool output] " + "{\"event\": 1} " * 200)
+    assert comp.summarize_incremental(None, long_turns) is None
+    assert comp.summarize_incremental("Goal: x\nDecisions: -\nKey facts: -\nOpen items: -", long_turns) is None
+
+
+def test_summary_structure_accepts_common_markdown_forms():
+    from tonst.compactor import _has_summary_structure
+    assert _has_summary_structure("- Goal: a\n- Decisions:\n    - b\n- Key facts: c\n- Open items: None")
+    assert _has_summary_structure("**Goal:** a\n**Decisions:** b\n## Key facts:\n- c")
+    assert not _has_summary_structure("Goal: a\nDecisions: b")               # only 2 of 4
+    assert not _has_summary_structure("My goal: help you. Decisions: none.")  # headings must start a line
+
+
+def test_rolling_prompt_repeats_the_task_after_the_conversation():
+    from tonst.compactor import ROLLING_COMPACTION_PROMPT
+    prompt = ROLLING_COMPACTION_PROMPT.format(summary="S", text="user: Will I get a tracking number?")
+    tail = prompt[prompt.index("user: Will I get a tracking number?"):]
+    assert "you are NOT a participant" in tail and "Goal:, Decisions:, Key facts:, Open items:" in tail
+
+
+def test_summarizer_input_clips_long_tool_output_but_folding_uses_full_size():
+    seen = []
+
+    class Spy(_CountingCompactor):
+        def summarize_incremental(self, previous, new_text, max_summary_chars=4000):
+            seen.append(new_text)
+            return super().summarize_incremental(previous, new_text, max_summary_chars)
+
+    long_reply = "Here is the tracking data. [tool output] " + "{\"hub\": \"PNQ-2\", \"status\": \"at_hub\"} " * 120
+    msgs = [{"role": "system", "content": "sys"}]
+    for i in range(6):
+        msgs += [{"role": "user", "content": f"question {i}"}, {"role": "assistant", "content": long_reply}]
+    state = RollingSummary()
+    r = compact_history_rolling(msgs, Spy(), state, keep_last_n=4, token_threshold=1500)
+    assert r.summary_updated                                   # full size (~6k tokens) triggered the fold
+    assert "more characters of tool output/data omitted" in seen[0]
+    assert "Here is the tracking data." in seen[0]            # the prose at the head survives
+    assert len(seen[0]) < len(long_reply) * 2                 # far smaller than the full batch
+    # Clipping off -> the summarizer sees everything.
+    seen.clear()
+    compact_history_rolling(msgs, Spy(), RollingSummary(), keep_last_n=4, token_threshold=1500, summary_input_chars=0)
+    assert "omitted" not in seen[0]
+
+
+
+# ---------------------------------------------------------------------
+# Pinned references (live 24-turn run lost case number CS-20931 from the summary)
+# ---------------------------------------------------------------------
+
+from tonst.compactor import extract_references
+
+
+def test_extract_references_finds_exact_identifiers_only():
+    text = ("Hi, my order #4471 arrived cracked. Your case number is CS-20931 and PAY-311 is the billing ticket. "
+            "Express costs 149 rupees, or ₹149; refund of $3.50. Email [[EMAIL_1a2b3c4d]]. "
+            "Hub PNQ-2 scanned it. Order #4471 again.")
+    refs = extract_references(text)
+    assert refs == ["#4471", "CS-20931", "PAY-311", "149 rupees", "₹149", "$3.50", "[[EMAIL_1a2b3c4d]]"]
+    assert "PNQ-2" not in refs          # single-digit codes are too noisy (tracking hubs etc.)
+
+
+def test_pinned_references_survive_a_thin_summary():
+    class Thin(_CountingCompactor):
+        def summarize_incremental(self, previous, new_text, max_summary_chars=4000):
+            self.calls.append((previous, new_text))
+            return "Goal: help\nDecisions: replacement\nKey facts: lamp damaged\nOpen items: none"
+
+    msgs = [{"role": "system", "content": "sys"},
+            {"role": "user", "content": "My order #4471 arrived cracked. " + "details " * 150},
+            {"role": "assistant", "content": "Your case number is CS-20931. " + "info " * 150}]
+    msgs += [{"role": "user", "content": f"q{i}"} if i % 2 == 0 else {"role": "assistant", "content": f"a{i}"}
+             for i in range(4)]
+    state = RollingSummary()
+    r = compact_history_rolling(msgs, Thin(), state, keep_last_n=4, token_threshold=200)
+    assert r.summary_updated and state.pinned == ["#4471", "CS-20931"]
+    header = r.messages[1]["content"]
+    assert header.startswith("[Summary of earlier conversation]\nGoal: help")
+    assert header.endswith("Pinned references from earlier turns (exact): #4471, CS-20931")
+    assert RollingSummary.from_dict(state.to_dict()).pinned == ["#4471", "CS-20931"]
+
+
+def test_pinned_references_survive_even_when_turns_are_dropped():
+    msgs = [{"role": "system", "content": "sys"},
+            {"role": "user", "content": "Case CS-20931 please. " + "x " * 600}]
+    msgs += [{"role": "user", "content": f"q{i}"} for i in range(4)]
+    state = RollingSummary()
+    r = compact_history_rolling(msgs, None, state, keep_last_n=4, token_threshold=100)   # no summarizer -> dropped
+    assert r.dropped_turns == 1
+    assert r.messages[1]["content"] == "[Earlier turns were trimmed] Pinned references from them (exact): CS-20931"
+
+
+def test_summary_with_headings_but_no_key_facts_is_rejected():
+    from tonst.compactor import _has_summary_content
+    assert not _has_summary_content("Goal:\nDecisions:\nKey facts:\nOpen items:")
+    assert not _has_summary_content("Goal: -\nDecisions: none\nKey facts: N/A\nOpen items: none")
+    # The best real summary from the 24-turn run (empty Goal) must still be accepted:
+    live = ("Goal: \nDecisions: replacement for the ceramic lamp from order #4471.  Express shipping upgraded.\n"
+            "Key facts:  Order #4471, damaged lamp, replacement lamp requested, delivery to Baner Road, Pune. \n"
+            "Open items:")
+    assert _has_summary_content(live)
+    comp = HistoryCompactor(model_call_fn=lambda p, m, t: "Goal:\nDecisions:\nKey facts:\nOpen items:")
+    assert comp.summarize_incremental(None, "user: hello there, my lamp broke. " * 30) is None
+
+
+
+# ---------------------------------------------------------------------
+# Optional API summarizer (a stronger alternative to the local 2B model)
+# ---------------------------------------------------------------------
+
+from tonst.summarizers import AnthropicSummarizer, MESSAGES_URL
+
+
+def test_anthropic_summarizer_request_usage_and_cost():
+    calls = []
+
+    def fake_post(url, headers, body, timeout):
+        calls.append((url, headers, body))
+        return {"content": [{"type": "text", "text": "Goal: g\nDecisions: d\nKey facts: k\nOpen items: none"}],
+                "usage": {"input_tokens": 3000, "output_tokens": 200}}
+
+    summ = AnthropicSummarizer(api_key="k", post_fn=fake_post)
+    out = summ("PROMPT", "gemma2:2b", 8.0)            # HistoryCompactor's call shape; its model arg is ignored
+    assert out.startswith("Goal: g")
+    url, headers, body = calls[0]
+    assert url == MESSAGES_URL and headers["x-api-key"] == "k"
+    assert body["model"] == "claude-haiku-4-5-20251001" and body["temperature"] == 0
+    assert body["messages"] == [{"role": "user", "content": "PROMPT"}]
+    assert summ.usage_total == {"input_tokens": 3000, "output_tokens": 200}
+    assert summ.cost_usd() == pytest.approx((3000 * 1.0 + 200 * 5.0) / 1_000_000)
+
+
+def test_anthropic_summarizer_fails_soft_and_plugs_into_the_client():
+    def boom(url, headers, body, timeout):
+        raise ConnectionError("offline")
+    bad = AnthropicSummarizer(api_key="k", post_fn=boom)
+    assert bad("PROMPT") is None and bad.failures == 1
+
+    seen = []
+
+    def fake_post(url, headers, body, timeout):
+        seen.append(body["messages"][0]["content"])
+        return {"content": [{"type": "text", "text": "Goal: help\nDecisions: replace\nKey facts: order #4471\nOpen items: none"}],
+                "usage": {"input_tokens": 10, "output_tokens": 5}}
+
+    client = TonstClient(call_fn=lambda p: "ok", use_history_compaction=True, compaction_token_threshold=100,
+                         compaction_summarizer=AnthropicSummarizer(api_key="k", post_fn=fake_post))
+    msgs = [{"role": "user", "content": "my email is jo@example.com and order #4471 " + "detail " * 200}]
+    msgs += [{"role": "user", "content": f"q{i}"} for i in range(6)]
+    state = RollingSummary()
+    _, report = client.query_messages(msgs, keep_last_n=4, rolling_state=state)
+    assert report.history_summary_updated and state.summary.startswith("Goal: help")
+    assert seen and "jo@example.com" not in seen[0]      # the remote summarizer only sees redacted text
+
+
+
+# ---------------------------------------------------------------------
+# cache-aware rolling compaction
+# ---------------------------------------------------------------------
+
+from tonst.compactor import estimate_fold_payback
+
+
+def test_fold_payback_estimate():
+    # 1.15 x (new summary 100 + kept 1000) one-off vs. 0.1 x (1000 - 100) saved per turn
+    assert estimate_fold_payback(1000, 1000, 0) == pytest.approx(1.15 * 1100 / 90)
+    # a paid summarizer makes the fold take longer to pay back
+    assert estimate_fold_payback(1000, 1000, 0, summarizer_input_tokens=1000, summarizer_price_ratio=1 / 3) \
+        > estimate_fold_payback(1000, 1000, 0)
+    # bigger batches pay back faster
+    assert estimate_fold_payback(8000, 1000, 0) < estimate_fold_payback(2000, 1000, 0)
+    # summary already at its cap and nothing evicted: never pays back
+    assert estimate_fold_payback(0, 1000, 500, max_summary_tokens=500) == float("inf")
+
+
+def test_cache_aware_postpones_fold_that_would_not_pay_back_in_a_short_chat():
+    comp, state = _CountingCompactor(), RollingSummary()
+    r = compact_history_rolling(_conv(10), comp, state, keep_last_n=4, token_threshold=500, cache_aware=True)
+    assert comp.calls == [] and r.fold_postponed_for_cache and not r.summary_updated
+    assert r.fold_payback_turns and r.fold_payback_turns > 2.5   # 5 user turns so far -> ~2.5 expected to follow
+    assert len(r.messages) == 1 + 10                              # nothing dropped: turns stay verbatim
+
+
+def test_cache_aware_folds_when_enough_turns_remain_or_prompt_too_big():
+    comp, state = _CountingCompactor(), RollingSummary()
+    r = compact_history_rolling(_conv(10), comp, state, keep_last_n=4, token_threshold=500, cache_aware=True,
+                                expected_remaining_turns=50)
+    assert r.summary_updated and not r.fold_postponed_for_cache
+
+    comp2, state2 = _CountingCompactor(), RollingSummary()
+    r2 = compact_history_rolling(_conv(10), comp2, state2, keep_last_n=4, token_threshold=500, cache_aware=True,
+                                 max_history_tokens=100)
+    assert r2.summary_updated  # context cap beats cache economics
+
+
+def test_cache_aware_off_is_unchanged_default():
+    comp, state = _CountingCompactor(), RollingSummary()
+    r = compact_history_rolling(_conv(10), comp, state, keep_last_n=4, token_threshold=500)
+    assert r.summary_updated and not r.fold_postponed_for_cache and r.fold_payback_turns is None
+
+
+def test_client_cache_aware_compaction_reports_postponed_fold_and_prices_haiku():
+    client = TonstClient(call_fn=lambda p: "ok", use_history_compaction=True, compaction_token_threshold=500,
+                         compaction_cache_aware=True,
+                         compaction_summarizer=AnthropicSummarizer(api_key="k", post_fn=lambda *a: {}))
+    assert client._summarizer_price_ratio() == pytest.approx(1 / 3)        # Haiku $1 vs. assumed Sonnet $3
+    _, report = client.query_messages(_conv(10), keep_last_n=4, rolling_state=RollingSummary())
+    assert report.history_fold_postponed and not report.history_summary_updated
+
+    local = TonstClient(call_fn=lambda p: "ok", use_history_compaction=True)
+    assert local._summarizer_price_ratio() == 0.0                           # local model: free
+
+
+
+# ---------------------------------------------------------------------
+# Gemini: summarizer, token counter, cache pricing
+# ---------------------------------------------------------------------
+
+from tonst import GeminiSummarizer, GeminiTokenCounter
+
+
+def _gemini_resp(text, prompt=3000, out=200, think=50):
+    return {"candidates": [{"content": {"parts": [{"text": "hmm", "thought": True}, {"text": text}]}}],
+            "usageMetadata": {"promptTokenCount": prompt, "candidatesTokenCount": out, "thoughtsTokenCount": think}}
+
+
+def test_gemini_summarizer_request_usage_cost_and_thought_parts_skipped():
+    seen = []
+
+    def fake_post(url, headers, body, timeout):
+        seen.append((url, headers, body))
+        return _gemini_resp("Goal: help")
+
+    summ = GeminiSummarizer(api_key="k", post_fn=fake_post)
+    assert summ("PROMPT") == "Goal: help"                       # the thought part is not part of the summary
+    url, headers, body = seen[0]
+    assert "gemini-3.5-flash-lite:generateContent" in url and headers["x-goog-api-key"] == "k"
+    assert body["contents"][0]["parts"][0]["text"] == "PROMPT"
+    assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
+    assert summ.usage_total == {"input_tokens": 3000, "output_tokens": 250}   # thinking bills as output
+    assert summ.cost_usd() == pytest.approx((3000 * 0.30 + 250 * 2.50) / 1_000_000)
+
+
+def test_gemini_summarizer_retries_without_thinking_on_400_and_fails_soft():
+    import requests as _rq
+
+    class _Resp:
+        status_code = 400
+
+    bodies = []
+
+    def picky(url, headers, body, timeout):
+        bodies.append(body)
+        if "thinkingConfig" in body["generationConfig"]:
+            e = _rq.HTTPError("bad"); e.response = _Resp(); raise e
+        return _gemini_resp("Goal: ok")
+
+    summ = GeminiSummarizer(api_key="k", post_fn=picky)
+    assert summ("P") == "Goal: ok" and len(bodies) == 2 and summ.failures == 0
+
+    def down(url, headers, body, timeout):
+        raise ConnectionError("offline")
+    bad = GeminiSummarizer(api_key="k", post_fn=down)
+    assert bad("P") is None and bad.failures == 1
+
+
+def test_gemini_token_counter_wraps_request_and_fails_soft():
+    seen = []
+
+    def fake_post(url, headers, body, timeout):
+        seen.append((url, body))
+        return {"totalTokens": 42}
+
+    c = GeminiTokenCounter(model="gemini-3.8-flash", api_key="k", post_fn=fake_post)
+    assert c("hello") == 42
+    url, body = seen[0]
+    assert url.endswith("gemini-3.8-flash:countTokens")
+    assert body["generateContentRequest"]["model"] == "models/gemini-3.8-flash"
+    assert body["generateContentRequest"]["contents"][0]["parts"][0]["text"] == "hello"
+    assert GeminiTokenCounter(api_key="k", post_fn=lambda *a: {})("x") is None
+
+
+def test_cache_pricing_presets_change_fold_payback():
+    anth = estimate_fold_payback(4000, 1000, 0, cache_pricing="anthropic")
+    gem = estimate_fold_payback(4000, 1000, 0, cache_pricing="gemini")
+    assert gem < anth                                    # no write surcharge: 0.9x vs 1.15x one-off
+    assert gem == pytest.approx(0.9 * 1400 / (0.1 * 3600))
+    assert estimate_fold_payback(4000, 1000, 0, cache_pricing=(1.0, 0.5)) < gem
+    with pytest.raises(ValueError):
+        estimate_fold_payback(4000, 1000, 0, cache_pricing="nope")
+
+
+
+def test_observed_cache_hit_rate_uses_previous_prompt_and_skips_prefix_changes():
+    st = RollingSummary()
+    st.observe_cache_usage(1000, 0)          # first response: nothing to compare against
+    assert st.cache_hit_rate is None and st.cache_observations == 0
+    st.observe_cache_usage(2000, 1000)       # all of the previous 1000 reused
+    assert st.cache_hit_rate is None         # one observation isn't enough yet
+    st.observe_cache_usage(3000, 0)          # nothing reused
+    assert st.cache_hit_rate == pytest.approx(0.7)    # EMA: 0.3 x 0 + 0.7 x 1.0
+    st._prefix_changed = True                # the summary changed before this call: a miss is expected
+    st.observe_cache_usage(1500, 0)
+    assert st.cache_observations == 2
+    back = RollingSummary.from_dict(st.to_dict())
+    assert back.cache_hit_rate == st.cache_hit_rate and back.cache_observations == 2
+
+
+def test_uncached_history_makes_folds_pay_back_immediately():
+    assert estimate_fold_payback(4000, 1000, 0, cache_pricing="gemini", cache_hit_rate=0.0) == 0.0
+    half = estimate_fold_payback(4000, 1000, 0, cache_pricing="gemini", cache_hit_rate=0.5)
+    assert 0.0 < half < estimate_fold_payback(4000, 1000, 0, cache_pricing="gemini")
+
+
+def test_cache_aware_folds_when_the_provider_is_not_actually_caching():
+    comp, state = _CountingCompactor(), RollingSummary(cache_hit_rate=0.0, cache_observations=5)
+    r = compact_history_rolling(_conv(10), comp, state, keep_last_n=4, token_threshold=500, cache_aware=True,
+                                cache_pricing="gemini")
+    assert r.summary_updated and not r.fold_postponed_for_cache      # the same chat with hits postpones (above)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

@@ -9,6 +9,10 @@ dependencies = [
     "requests>=2.25",
 ]
 
+[project.scripts]
+# `tonst stats` -- summarizes the opt-in local savings log (tonst/savings_log.py).
+tonst = "tonst.__main__:main"
+
 [project.optional-dependencies]
 local-model = []  # Ollama is a separate runtime, not a pip dependency
 # redaction_backend="gliner" (see tonst/client.py, tonst/gliner_redact.py):

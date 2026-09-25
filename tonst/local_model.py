@@ -23,6 +23,8 @@ import time
 
 import requests
 
+from .ollama_util import fits_context, num_ctx_for
+
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 # Diagnostic only -- never affects behavior. See redact_llm.py's matching
@@ -115,12 +117,18 @@ class LocalCompressor:
         # input, capping generation at ~2x the input's word count leaves ample
         # room for a real rewrite while bounding runaway generation.
         max_output_tokens = max(64, int(len(text.split()) * 2))
+        prompt = COMPRESSION_INSTRUCTION.format(text=text)
+        if not fits_context(prompt, max_output_tokens):
+            # Ollama would silently truncate the input and we'd "compress" a
+            # partial copy -- skip compression instead (fail-soft, as always).
+            logger.warning("compress: text too long for the local model's context window; not compressing")
+            return text, False
         try:
             resp = _SESSION.post(
                 self.ollama_url,
                 json={
                     "model": self.model,
-                    "prompt": COMPRESSION_INSTRUCTION.format(text=text),
+                    "prompt": prompt,
                     "stream": False,
                     # temperature=0: makes compression deterministic. Verified via
                     # diagnose_local_llm_perf.py (2026-09-13) to cost nothing in
@@ -128,7 +136,11 @@ class LocalCompressor:
                     # VARIED outputs into IDENTICAL ones across repeated calls on
                     # the same input -- pure upside for guard-rail predictability
                     # and benchmark reproducibility.
-                    "options": {"temperature": 0.0, "num_predict": max_output_tokens},
+                    "options": {
+                        "temperature": 0.0,
+                        "num_predict": max_output_tokens,
+                        "num_ctx": num_ctx_for(prompt, max_output_tokens),  # see ollama_util.py
+                    },
                 },
                 timeout=self.timeout,
             )

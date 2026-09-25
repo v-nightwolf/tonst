@@ -185,7 +185,9 @@ class CacheEligibility:
         )
 
 
-def check_cache_eligibility(parts: PromptParts, model: str, token_estimator=None) -> CacheEligibility:
+def check_cache_eligibility(
+    parts: PromptParts, model: str, token_estimator=None, tools: Optional[list] = None
+) -> CacheEligibility:
     """
     Estimates whether the stable/cacheable portion of `parts` meets
     Anthropic's minimum prefix length for `model`. Meant to catch an
@@ -193,12 +195,20 @@ def check_cache_eligibility(parts: PromptParts, model: str, token_estimator=None
     spending an API call that silently won't cache -- not a substitute
     for checking real usage.cache_creation_input_tokens /
     usage.cache_read_input_tokens from an actual response.
+
+    `tools`, if given, counts toward the cached prefix too (tool
+    definitions come first in Anthropic's prefix order) -- except tools
+    marked defer_loading, which the API keeps out of the prefix.
     """
     if token_estimator is None:
         from .trim import estimate_tokens as token_estimator
 
     stable_text = "\n\n".join([parts.system or ""] + list(parts.stable_blocks))
     stable_tokens = token_estimator(stable_text) if stable_text.strip() else 0
+    loaded = [t for t in (tools or []) if not t.get("defer_loading")]
+    if loaded:
+        import json
+        stable_tokens += token_estimator(json.dumps(loaded, separators=(",", ":"), sort_keys=True))
 
     minimum = CACHE_MINIMUM_TOKENS.get(model, DEFAULT_CACHE_MINIMUM_TOKENS)
     return CacheEligibility(
@@ -215,6 +225,7 @@ def build_anthropic_cache_request(
     max_tokens: int = 1000,
     cache_ttl: str = "5m",
     warn_if_ineligible: bool = True,
+    tools: Optional[list] = None,
 ) -> dict:
     """
     Builds the JSON body for a direct call to
@@ -240,16 +251,36 @@ def build_anthropic_cache_request(
     message body -- there's nothing to cache, so the block-array
     overhead (and the cost of writing a cache entry with no reuse ahead
     of it) isn't worth it.
+
+    `tools` (optional) is passed through as the request's `tools` array,
+    unmodified -- e.g. the output of tool_optimizer.select_tools() or
+    build_anthropic_deferred_tools(). Tools come FIRST in Anthropic's
+    cache prefix, so the system breakpoint already covers them; when
+    there's no system prompt, a breakpoint is put on the last
+    non-deferred tool instead so the tool definitions still get cached.
     """
     if cache_ttl not in VALID_TTLS:
         raise ValueError(f"cache_ttl must be one of {VALID_TTLS}, got {cache_ttl!r}")
 
     if warn_if_ineligible:
-        eligibility = check_cache_eligibility(parts, model)
+        eligibility = check_cache_eligibility(parts, model, tools=tools)
         if not eligibility.eligible:
             warnings.warn(eligibility.message, UserWarning, stacklevel=2)
 
     body: dict = {"model": model, "max_tokens": max_tokens}
+
+    if tools:
+        for t in tools:
+            if t.get("defer_loading") and "cache_control" in t:
+                raise ValueError(
+                    f"tool {t.get('name')!r} has both defer_loading and cache_control; "
+                    "Anthropic rejects that with a 400"
+                )
+        body["tools"] = [dict(t) for t in tools]
+        if not parts.system:
+            loaded_idx = [i for i, t in enumerate(body["tools"]) if not t.get("defer_loading")]
+            if loaded_idx and not any("cache_control" in t for t in body["tools"]):
+                body["tools"][loaded_idx[-1]]["cache_control"] = {"type": "ephemeral", "ttl": cache_ttl}
 
     if parts.system:
         body["system"] = [

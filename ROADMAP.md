@@ -321,17 +321,198 @@ assuming:
    README's "Testing against a real provider" section and files table
    updated accordingly.
 
+### Four free-tier features — shipped (Sept 2026)
+
+Chosen from a feasibility review of seven proposed ideas (see the
+project's research notes). The other three were not built: a
+semantic/exact response cache (already removed, see above), local-first
+model routing (a different product that changes answer quality; the
+local-model benchmarks argue against it on typical hardware), and a
+prompt-injection scanner (a crowded category, and keyword detection
+gives false confidence).
+All four are free/MIT by design: they drive adoption. The paid tier
+stays centered on the audit/compliance trail, team policy and support.
+
+- **Rolling compaction** (`compact_history_rolling()`, `RollingSummary`,
+  `query_messages(rolling_state=...)`). Fixes a real gap in the
+  stateless compactor: it re-summarized every older turn on every call,
+  paying local-model latency each turn and producing a summary that
+  changed every turn, so it could never be cached. Rolling mode keeps
+  evicted turns verbatim until they reach the threshold, then folds them
+  into the existing summary once. Between folds the prompt is
+  append-only.
+- **Tool/MCP definition optimization** (`tool_optimizer.py`). Anthropic
+  now supports deferred tool loading natively (tool search tool +
+  `defer_loading`), so on Anthropic tonst just builds that request
+  correctly. For other providers it filters locally with BM25.
+  `ToolSession` is grow-only, because per-turn filtering otherwise
+  invalidates the prompt cache (tools sit at the front of the prefix).
+  Tool descriptions are never rewritten by the local model.
+- **RAG context optimization** (`rag.py`, `query_rag()`). Deduplicates
+  and optionally filters retrieved chunks by relevance or token budget.
+  It only selects whole chunks and never rewrites one. Per-chunk local
+  compression was left out on purpose, based on the ablation numbers.
+- **Savings log + `tonst stats`** (`savings_log.py`). Opt-in local JSONL
+  of per-call metrics. It never records prompt text, PII values or
+  placeholder hashes (hashes are brute-forceable). Token counts are
+  marked as estimates. This is the data layer for the hosted dashboard.
+  The open-core line: this free log is deliberately *not* an audit
+  record (no tamper-evidence or retention).
+
+**Offline benchmark** (`benchmark_free_features.py`, hand-built but
+realistic workloads, not real traffic; full table in the README):
+tool filtering reached 100% recall and 83% fewer tool tokens on direct
+requests (`top_k=5`, 36 tools). RAG dedupe alone cut 19% of context
+tokens, or 63% with `top_k=4`, keeping the answer chunk 4/4 (small
+sample). Rolling compaction made 4 local-model calls vs. 26 for
+stateless, and cost less than half as much with prefix caching at a 10%
+cache price, despite sending more raw tokens.
+
+**A real flaw the benchmark caught, and fixed:** the first version of
+`select_tools()` had only 50% recall on paraphrased requests. A
+one-word coincidental match ("book a *slot*" vs. a free-time-*slots*
+tool) beat the "nothing matched, keep everything" fallback and silently
+dropped the needed tool. Fixed with `min_matched_terms=2`: the best
+match must share at least two distinct words with the request, or
+nothing is filtered. Recall on paraphrased requests went to 100%. The
+same rule was applied to `ToolSession` growth and RAG filtering.
+135/135 tests.
+
+**Seven fixes from hands-on testing on a MacBook Air (same day):**
+(1) compaction timeout is now its own setting, `compaction_timeout`,
+default 60s (a ~7k-token fold timed out at the shared 8s); (2) a failed
+rolling fold keeps the turns verbatim and retries once before dropping
+(the first version lost 14 turns to one cold-start timeout); (3) the
+first fold now uses the structured Goal/Decisions/Key facts/Open items
+prompt (it used to produce free-form prose); (4) `query_rag()` reports
+`chunk_filter_skipped`; (5) the savings log records summary
+updated/reused/failed; (6) dropped-without-summary history is reported
+as `history_tokens_lost` and shown separately in `tonst stats` instead
+of silently inflating "saved"; (7) `tonst stats` shows median/max
+overhead (one 8s timeout had pushed the mean to 1.3s). 143/143 tests.
+Live measured: a ~1k-token fold took ~5s with gemma2:2b and the next
+turn reused it in 0 ms. The summary kept every key fact of the test
+conversation.
+
+`live_test_free_features.py` added: the real-API test for tools (all
+vs. filtered vs. deferred, with a correct-tool check), rolling vs.
+stateless compaction cache reads, and estimate accuracy.
+
+**First live API result (5 direct tasks, Sonnet 4.6):**
+- `select_tools(top_k=5)`: 5/5 correct, 72% less billed input, 64% lower cost.
+- Deferred loading: 4/5 correct, 41% less input, 26% lower cost; roughly
+  2× output tokens from the search step. One miss (searched once, then
+  answered without a tool call). The script didn't save why, so it now
+  records the stop reason, reply text and search results for every miss.
+- Real billed input was 1.79× the chars/4 estimate: hidden tool-use
+  prompt plus token-dense JSON. Added optional `AnthropicTokenCounter`
+  (free `count_tokens` endpoint) for `TonstClient(token_counter=...)`
+  and `select_tools(token_counter=...)`. It only ever sees redacted
+  text (enforced by a test), is fail-soft, and its time is reported as
+  `counting_ms`. 150/150 tests.
+
+**Full live tools run (30 tasks, Sonnet 4.6):**
+- All tools: 23/30, $0.39.
+- `select_tools`: 23/30, $0.19. It kept 22 of the 23 all-tools successes; the other was a reasonable list-tables-first.
+- Everything deferred: 18/30, $0.27, with 2× output tokens.
+- Deferred failure mode: Claude sent the tool search the TOPIC ("billing outage", "on-call runbook") instead of the capability, found nothing, and told the user the data didn't exist.
+- Fix: `build_anthropic_deferred_tools(keep_search_tools_loaded=True)` by default, plus `DEFERRED_TOOLS_SYSTEM_HINT`.
+- Test fixes: underspecified tasks now include their content; outcomes are scored as correct / acceptable / asked / wrong tool / no tool; `ACCEPTABLE_FIRST_STEPS` covers reasonable alternatives; the live script compares `deferred` (fixed) and `deferred_plain` (old).
+- `count_tokens` matched billed input on 60/60 calls; chars/4 was 1.77× low.
+- Guidance: `select_tools` up to ~50 tools; deferred (with the fixes) for large catalogs. 151/151 tests.
+- **Re-run after the fixes (30 tasks):**
+  - all tools: 30/30, $0.40
+  - `select_tools`: 30/30, $0.19 (−51%; −64% on direct requests)
+  - deferred with tonst defaults + hint: 29/30, $0.33 (−18%)
+  - everything deferred: 25/30, $0.30
+  - The fix removed every "search found nothing" failure. Its one new miss: it used the loaded `github_search_issues` to "read issue 482" instead of searching for `github_get_issue`.
+  - Deferral doesn't pay at 36 tools: calls that need a search average ~3,300 input tokens.
+  - count_tokens matched billed input 60/60 again.
+- **Conclusion:** `select_tools` is the recommended default for catalogs up to ~50 tools; deferred is for very large catalogs only.
+
+**Live compaction run (12 turns, Sonnet 4.6, gemma2:2b):**
+- Rolling: $0.0163 vs. stateless $0.0185 (−12% overall; about −47% on the history portion, since the cached system prompt dominates a short chat).
+- 1 local summary vs. 4 (7 s vs. 17 s).
+- Rolling sent 4% more raw tokens but cost less, as the offline benchmark predicted.
+- Cache reads grew every turn in rolling mode and stayed flat in stateless mode.
+- Summary: right structure and core facts, but a settled decision (express upgrade) was listed under Open items, and `---` fences were echoed from the prompt.
+- Fixed: `_clean_summary()` strips echoed fence/label lines, and the prompt defines Decisions vs. Open items explicitly. 153/153 tests.
+- chars/4 was within 10% for prose (1.1×), so the 1.77× miss is JSON-specific.
+- Worth measuring next: a longer chat (`--turns 24`) to see the gap grow.
+
+**Latency + cost vs. no compaction (24 turns, threshold 600):**
+- Costs: none $0.0295, stateless $0.0330, rolling $0.0291.
+- tonst's own code: ~0.1 ms/turn. API p50 ~1.7 s in every mode, so prompt length didn't change API latency.
+- Stateless added 2.5-5 s on 7/24 turns (p95 total 5.5 s vs. 2.9 s). Rolling added 4.7 s on 1 turn.
+- **Conclusions:** (1) with provider caching, stateless is counterproductive, so recommend rolling only; (2) compaction doesn't save money on short chats (cached history re-reads are cheap), and pays only for long histories / context limits, hence the 3,000-token default threshold.
+- Test costs reconciled: the script's per-run costs sum to $2.40 for all live testing, matching the API console.
+
+**Background summaries:** `compact_history_rolling(defer_fold=True)` returns a `FoldJob`; `run_fold_job()` applies it thread-safely. `query_messages(background_summary=True)` runs the summary on a background thread in parallel with the API call, removing the local model from response time. The next call uses the summary. `wait_for_background_work()` is provided.
+- Stale jobs are discarded: a generation counter plus a fingerprint of the covered messages. A test caught that start_count/previous_summary alone couldn't tell a new conversation from the old one.
+
+**Ollama num_ctx fix (found before it bit):** Ollama's default context (2k-4k) silently drops the START of longer prompts, so summaries at the 3,000-token threshold would have lost the oldest turns.
+- `tonst/ollama_util.py` sizes num_ctx per request, capped by TONST_OLLAMA_MAX_CTX (8192).
+- Compaction and compression refuse over-long prompts; LLM redaction warns.
+- `live_test_free_features.py --long` added: ~500-token tool outputs, history ~13k tokens at the real 3,000 threshold; modes none / rolling / rolling_bg.
+- 161/161 tests.
+
+**Long-history live run (12 turns, ~12.6k tokens):**
+- Cost: none $0.0719, rolling $0.0687 (−4%), rolling_bg $0.0791 (+10%; the summary landed 2 turns later with a bigger cache rewrite).
+- Latency: the blocking summary took 12.3 s (turn total 13.9 s); background had zero added latency (max 2.8 s).
+- Cost saving is on cache reads only (~26%/turn after the summary; ~2-3 turns to pay back the rewrite). Compaction is mainly for context limits, with a modest cost win on long chats.
+- **Critical finding:** gemma2:2b replied to the customer instead of summarizing ~3k tokens of tool output. It passed all guard rails and would have injected false claims.
+- Fixed: a heading-structure guard (at least 3 of 4 headings, else rejected); the task repeated after the conversation; each message clipped to 700 chars in the summarizer input. 165/165 tests.
+- Next: `--long` now defaults to 24 turns (~$0.76, estimate calibrated on the real 12-turn cost); re-run to check summary quality and cost over a longer chat.
+
+**24-turn long-history run (after the fixes):**
+- Cost: none $0.186, rolling $0.147 (−21%), rolling_bg $0.168 (−10%). Tokens −50% / −42%.
+- Latency: rolling p95 10.9 s; rolling_bg p95 2.0 s (one 9.5 s API-side spike, tonst 0.7 ms).
+- No garbage summaries; one attempt was rejected and retried correctly.
+- But the local summary lost the white colour, the evening slot and case CS-20931.
+- Fixes: **pinned references** (deterministic extraction of placeholders, #-numbers, ticket codes and amounts; carried verbatim; kept even when turns are dropped; persisted in `RollingSummary.to_dict`), a **content check** (Key facts must be non-empty), and an optional **`AnthropicSummarizer`** (Haiku 4.5, `TonstClient(compaction_summarizer=...)`, redacted text only, usage/cost tracked).
+- Live script: `--long` defaults to none / rolling_bg / rolling_bg_haiku; the Haiku cost is added to its mode; a new **fact recall** metric scores facts from summarized turns. 171/171 tests.
+
+**Local vs. Haiku summaries (24 turns, background, 2026-09-25):**
+- Cost: none $0.186, local $0.189 (+1.6%), Haiku $0.181 (−2.7%, Haiku's $0.011 included).
+- Fact recall: local 5/8, **Haiku 8/8**. Pinned references carried #4471 and CS-20931 in both.
+- Latency was the same in all three modes.
+- Why cost barely moved: with prompt caching, old history costs 0.1× to re-read, and each summary forces a 1.25× cache rewrite of everything after the system prompt. The last summary (3 turns before the end) never paid back.
+- Fix: **cache-aware compaction** (`compaction_cache_aware=True`, `estimate_fold_payback`, `expected_remaining_turns`, `compaction_max_history_tokens`, report field `history_fold_postponed`). A due summary waits until its estimated payback fits the turns left, which defaults to half the turns so far.
+- Offline simulation (in the benchmark, calibrated to the live run): it removes the +8–15% loss in 10–12-turn chats and is neutral from 20 turns on.
+- With caching, compaction saves money only past ~20 turns (−18% at 40, −55% at 100); below that it's for fidelity and context headroom.
+- Live script: new mode `rolling_bg_haiku_aware`. 176/176 tests.
+- **Live 12-turn check:** none $0.0719; Haiku at threshold $0.0826 (+14.9%; its summary landed 2 turns later, 1 turn before the end); cache-aware $0.0719 (0.0%, postponed on 4 turns, no Haiku call). The simulation predicted +7.7% / 0%, so the real loss from an early summary was larger than modeled.
+
+**Gemini (3.8 Flash, thinking low) — tools, 30 tasks (2026-09-25):**
+- all 29/30 $0.0738; filtered 29/30 $0.0331 (−55%, direct −70%); 29/29 paired.
+- Same miss in both modes. Paraphrased tasks fell back to all tools (safe, no saving).
+- 0% implicit cache hits: prompts (~2.9k tokens) were under Flash's 4,096 minimum.
+- chars/4 within 2% on Gemini (1.77× low on Claude).
+- countTokens exact 60/60 but ~320 ms per call; select_tools 2.3 ms. Run cost $0.11.
+- Added: `GeminiSummarizer`, `GeminiTokenCounter`, `compaction_cache_pricing` ("anthropic"/"gemini"/tuple), `live_test_gemini.py`, Gemini provider in the cost simulation. 180/180 tests.
+
+**Gemini compaction, 20 turns (2026-09-25):**
+- none $0.1329 (35% cached); Flash-Lite summaries $0.1128 (−15.1%, 8/8 facts, p95 2.7 s vs 4.0 s); cache-aware $0.1389 (+4.5%).
+- Gemini's implicit cache hit 0% from turn 4 to turn 15, and only started at ~18k tokens.
+- Cache-aware mode wrongly assumed caching and postponed the summary for 6 turns.
+- Fix: `RollingSummary.observe_cache_usage(prompt, cached)` keeps an observed hit rate (share of the previous prompt reused; skips turns after a summary change; EMA 0.3; needs 2 observations; persisted). `estimate_fold_payback(cache_hit_rate=)` prices misses at the write price.
+- Replay of this run: now folds at turn 9, same as plain rolling (−15%). Unchanged when the cache always hits. 183/183 tests.
+- Confirmed live: cache-aware $0.1206 (−9.3% vs. none), 0% observed hit rate, folds at turns 9 and 15, 0 postponed, 8/8 facts.
+
+**Still not measured on real traffic:** tool savings on a real
+MCP-heavy agent, dedupe rates on a real retriever, and real cache-hit
+rates for rolling compaction against a live provider.
+
 ## Open discussion topics
 
 ### More token-reduction techniques — planned, not yet built
 
 Next up, in rough priority order: schema compaction (terser field names/
 structure on outgoing structured-output requests, expanded back
-transparently), a text-vs-image tile-cost router (pick whichever encoding
-costs fewer tokens for a given chunk of context, given a legibility floor),
-tool/function-definition trimming for agentic workloads, and RAG-style
-context retrieval (inject only the relevant chunk of a reference doc
-instead of the whole thing, starting with simple keyword-based selection).
+transparently) and a text-vs-image tile-cost router (pick whichever
+encoding costs fewer tokens for a given chunk of context, given a
+legibility floor). Tool/function-definition trimming and RAG context
+optimization have shipped (see above).
 
 ### Java support — interested?
 
