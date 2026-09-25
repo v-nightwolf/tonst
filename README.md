@@ -64,6 +64,56 @@ Across **384 live API benchmark iterations** spanning 6 enterprise verticals (Me
 |---|---|---|---|---|
 | **Local Trim + GLiNER Redaction + Compression** | 360 Runs (`claude-3-5-sonnet-20241022` pricing baseline) | **23.68% token drop** (Space) | **21.09% token drop** | 100.0% Structured PII Recall (0 leaks), 87.78% Free-Text PII Recall |
 | **Provider Prompt Caching** | 24 Calls (`gemini-3.1-flash-lite`) | **72.00% read discount** | **53.00% net cost drop** | Zero cache-key leakage |
+| **Tool / MCP definition filtering** (`select_tools`, top 5 of 36) | 30 tasks × 2 providers (`claude-sonnet-4-6`, `gemini-3.8-flash`) | **−70% cost** on direct tasks (Gemini) | **−51% (Claude) / −55% (Gemini) cost** | Same success as sending all tools: 30/30 Claude, 29/30 Gemini (same miss either way) |
+| **Rolling history compaction** (background summaries) | 20–24-turn support chats, both providers | **−15.1% cost, −43% tokens** (Gemini, 20 turns) | −2.7% (Claude + Haiku, 24 turns, cache already cheap) | 8/8 facts kept with Haiku / Flash-Lite summaries; no added latency |
+
+---
+
+### Free features on live APIs (Claude Sonnet 4.6 + Gemini 3.8 Flash, September 2026)
+
+These are real API calls with billed usage, from `live_test_free_features.py`
+(Anthropic) and `live_test_gemini.py` (Gemini). The same 30 tool tasks and
+the same scripted support conversation were used on both providers. Details
+and every intermediate run are in "Tool and MCP definition optimization",
+"Rolling compaction" and ROADMAP.md.
+
+**Tool filtering: 36 tool definitions, 30 tasks (24 direct, 6 paraphrased)**
+
+| | Claude Sonnet 4.6 | Gemini 3.8 Flash (thinking low) |
+|---|---|---|
+| Success, all tools sent | 30/30 | 29/30 |
+| Success, `select_tools` (top 5) | **30/30** | **29/30** (29/29 of the tasks "all" got right) |
+| Cost, all → filtered | $0.40 → **$0.19 (−51%)** | $0.0738 → **$0.0331 (−55%)** |
+| Direct tasks only | −64% | −70% |
+| Anthropic deferred loading (tool search) | 29/30, −18% | n/a (Anthropic-only) |
+
+- Paraphrased requests that tonst isn't confident about fall back to sending every tool: no saving, but no risk either.
+- Gemini's implicit cache never hit on these prompts (~2.9k tokens, under Flash's 4,096-token minimum), so filtering was the only saving available there.
+
+**Rolling compaction: long support chat (~500 tokens of tool output per reply)**
+
+| | Turns | No compaction | With compaction | Facts kept |
+|---|---|---|---|---|
+| Gemini 3.8 Flash, Flash-Lite summaries | 20 | $0.1329 | **$0.1128 (−15.1%)**, tokens −43% | 8/8 |
+| Gemini, cache-aware (observed hit rate) | 20 | $0.1329 | $0.1206 (−9.3%) | 8/8 |
+| Claude Sonnet 4.6, Haiku summaries | 24 | $0.186 | $0.181 (−2.7%), tokens −41% | 8/8 |
+| Claude, local gemma2:2b summaries | 24 | $0.186 | $0.189 (+1.6%) | 5/8 |
+| Claude, cache-aware, short chat | 12 | $0.0719 | $0.0719 (0%; summarizing anyway: +14.9%) | — |
+
+- **Claude:** prompt caching already makes old history cheap (0.1× on reads), so compaction is near break-even until ~20 turns. The offline simulation puts it at −18% by 40 turns and −55% by 100.
+- **Gemini:** implicit caching is best-effort. It served 0% of this chat until ~18k tokens, so compaction paid off sooner.
+- **Cache-aware mode** reads the cache hit rate the provider actually reports and adjusts to either case.
+
+**Accuracy and latency**
+
+| | Claude | Gemini |
+|---|---|---|
+| chars/4 estimate vs. real prompt tokens | 1.77× low (tool JSON + hidden tool prompt) | within 2% |
+| Provider token-count endpoint vs. billed | 60/60 exact | 60/60 exact, ~320 ms per count |
+| `select_tools()` time | — | 2.3 ms p50 (max 4.5 ms) |
+| tonst's own compaction work per turn | ≤ 6 ms | ≤ 3 ms |
+| Background summaries on the request path | 0 ms | 0 ms (p95 response time fell from 4.0 s to 2.7 s with smaller prompts) |
+| Blocking local summary (gemma2:2b on a MacBook Air) | 4.7–12 s on the turn it runs | — |
 
 ---
 
