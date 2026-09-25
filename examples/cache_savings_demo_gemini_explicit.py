@@ -1,9 +1,9 @@
 """
-cache_savings_demo_gemini_explicit.py
+examples/cache_savings_demo_gemini_explicit.py
 --------------------------------------
 Measures REAL prompt-caching savings against Gemini's EXPLICIT
 CachedContent path -- the deterministic sibling of
-cache_savings_demo_gemini.py, which tests the IMPLICIT (automatic,
+examples/cache_savings_demo_gemini.py, which tests the IMPLICIT (automatic,
 best-effort) path instead. Read that script's docstring first if you
 haven't; this one exists because of what live-testing found there.
 
@@ -28,7 +28,7 @@ STORAGE RENT per hour it exists (whether read again or not) until its
 TTL expires or you delete it, which this script does automatically at
 the end regardless of success or failure.
 
-This script reuses cache_savings_demo_gemini.py's REFERENCE_DOC, MODEL,
+This script reuses examples/cache_savings_demo_gemini.py's REFERENCE_DOC, MODEL,
 and GEMINI_API_KEY rather than duplicating them -- same document, same
 model, same 4,096-token minimum, so there is nothing provider- or
 content-specific left to differ between the two demos except which
@@ -48,10 +48,10 @@ Setup:
        storage quota -- the cachedContents.create call below will fail
        with a 429 RESOURCE_EXHAUSTED error on a free-tier key. See
        providers/gemini.py's module docstring for the exact error.
-    3. Put it in a .env file in this directory (gitignored):
+    3. Put it in a .env file in the repository root (gitignored):
            GEMINI_API_KEY=AI...
        or export it directly in your shell.
-    4. python3 cache_savings_demo_gemini_explicit.py
+    4. python3 examples/cache_savings_demo_gemini_explicit.py
 
 What you should see (confirmed by an actual run, Sept 2026, with
 billing enabled): the resource is created (populate cost ~4,824
@@ -65,6 +65,9 @@ full price with no discount, so the blended figure climbs toward the
 steady-state number the more times the cache gets reused within its
 TTL.
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import sys
@@ -133,7 +136,7 @@ def main():
     eligibility = gemini_provider.check_cache_eligibility(parts, model=base.MODEL)
     print(f"--- Cache eligibility check ---\n{eligibility.message}\n")
     if not eligibility.eligible:
-        print("Stopping -- adjust REFERENCE_DOC (in cache_savings_demo_gemini.py) before spending API calls.")
+        print("Stopping -- adjust REFERENCE_DOC (in examples/cache_savings_demo_gemini.py) before spending API calls.")
         sys.exit(1)
 
     print(f"--- Step 1: create CachedContent (model={base.MODEL}, ttl={TTL_SECONDS}s) ---")

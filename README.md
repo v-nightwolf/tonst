@@ -479,6 +479,20 @@ trimming, and tonst reports 0% rather than inventing a saving.
 Some documents cite research notes under `research/`; those notes aren't
 published in this repository.
 
+**Repository layout**
+
+```
+tonst/              the library
+test_tonst.py       unit tests (the only thing CI runs)
+examples/           runnable demos: demo.py (no API key needed), real_api_demo.py, cache_savings_demo_*.py per provider
+benchmarks/         offline benchmark and live API tests (benchmark_free_features.py, live_test_*.py, benchmark_tonst.py)
+scripts/research/   one-off diagnostic and tuning scripts behind the findings in docs/ (need GLiNER or Ollama)
+docs/               detailed documentation
+```
+
+Run scripts from the repository root, e.g. `python3 examples/demo.py`.
+API keys go in a `.env` file in the repository root (gitignored).
+
 ## Whitepaper, license and contributing
 
 - **Whitepaper:** [Beyond the Prompt](https://claude.ai/artifact/2hcKTcfwBzAWev1PUGRv2x) · DOI [10.5281/zenodo.22745266](https://doi.org/10.5281/zenodo.22745266)

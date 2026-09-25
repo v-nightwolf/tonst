@@ -1,9 +1,9 @@
 """
-live_test_free_features.py
+benchmarks/live_test_free_features.py
 --------------------------
 Measures the free features against the REAL Anthropic API -- real billed
 token counts from each response's `usage` field, not tonst's chars/4
-estimates. benchmark_free_features.py answers "does the mechanism
+estimates. benchmarks/benchmark_free_features.py answers "does the mechanism
 behave?"; this answers "does it actually save money on a real provider,
 and does the model still do the right thing?"
 
@@ -57,14 +57,14 @@ Misses are diagnosable: for every call where Claude didn't call a
 correct tool, the stop reason, Claude's text reply and (in deferred
 mode) the tools its search returned are saved and printed.
 
-Setup (same as cache_savings_demo_anthropic.py):
-    1. ANTHROPIC_API_KEY in a .env file in this directory (gitignored),
+Setup (same as examples/cache_savings_demo_anthropic.py):
+    1. ANTHROPIC_API_KEY in a .env file in the repository root (gitignored),
        or exported in your shell.
     2. Optional, for real summaries in part 2: `ollama run gemma2:2b "hi"`
        first so the model is loaded.
-    3. python3 live_test_free_features.py            (asks before spending)
-       python3 live_test_free_features.py --part tools --tasks 10
-       python3 live_test_free_features.py --part compaction --no-ollama
+    3. python3 benchmarks/live_test_free_features.py            (asks before spending)
+       python3 benchmarks/live_test_free_features.py --part tools --tasks 10
+       python3 benchmarks/live_test_free_features.py --part compaction --no-ollama
 
 Cost: roughly $1.30 at claude-sonnet-4-6 list prices for everything
 (~120 small tool calls + ~24 conversation calls); a cost estimate is
@@ -73,6 +73,10 @@ live_test_results.json.
 """
 
 from __future__ import annotations
+# Run from anywhere: make the repo root (and this folder) importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import argparse
 import json
 import os
@@ -81,7 +85,7 @@ import time
 
 
 def _load_dotenv_if_present():
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path) as f:
@@ -701,7 +705,7 @@ def main(argv=None) -> int:
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        print("ANTHROPIC_API_KEY is not set. Put it in a .env file next to this script or export it.")
+        print("ANTHROPIC_API_KEY is not set. Put it in a .env file in the repository root or export it.")
         return 1
 
     n_tasks = max(1, min(args.tasks, len(TASKS)))

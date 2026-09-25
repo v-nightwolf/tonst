@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-test_codename_threshold_precision.py
+scripts/research/test_codename_threshold_precision.py
 ---------------------------------------
-test_codename_threshold_sweep.py found that lowering GLiNER's detection
+scripts/research/test_codename_threshold_sweep.py found that lowering GLiNER's detection
 threshold from 0.3 to 0.05 nearly doubles codename recall (48.05% ->
 79.22%) with full_name/company staying at or improving on 100% -- a much
 stronger lever than any label rewording tested. But mean entities/case
@@ -23,8 +23,13 @@ actually see which one it is, instead of assuming.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 test_codename_threshold_precision.py
+    python3 scripts/research/test_codename_threshold_precision.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 

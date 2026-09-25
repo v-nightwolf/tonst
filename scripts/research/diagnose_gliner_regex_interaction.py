@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-diagnose_gliner_regex_interaction.py
+scripts/research/diagnose_gliner_regex_interaction.py
 -------------------------------------
 Tests a specific hypothesis about why in-pipeline GLiNER recall
-(72.78% free-text recall on a real 180-iteration benchmark_tonst.py
+(72.78% free-text recall on a real 180-iteration benchmarks/benchmark_tonst.py
 run, 2026-09-13) sits well below what the standalone per-field sanity
 check would predict (full_name 100%, company 98.89%, codename 74.44%
 -- a ~91% weighted average). This gap held essentially flat across a
@@ -12,7 +12,7 @@ rules out sample noise as the explanation -- something structural is
 different between how the standalone check measured GLiNER and how
 the real pipeline actually calls it.
 
-The one real difference: the standalone check (gliner_sanity_check.py)
+The one real difference: the standalone check (scripts/research/gliner_sanity_check.py)
 runs GLiNER on RAW, unredacted text. The real pipeline never does that
 -- redact.redact_with_llm() ALWAYS runs regex first, so GLiNER only
 ever sees text that already contains [[EMAIL_xxxxxxxx]]-style
@@ -22,14 +22,19 @@ GLiNER is supposed to catch. This script tests, directly, on matched
 pairs of the SAME generated cases: does GLiNER's recall differ between
 raw text and regex-pre-redacted text?
 
-Uses the identical "loose" matching logic as gliner_sanity_check.py
+Uses the identical "loose" matching logic as scripts/research/gliner_sanity_check.py
 (entity_matches/normalize) so numbers here are apples-to-apples with
 the standalone check's own definition of recall.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 diagnose_gliner_regex_interaction.py
+    python3 scripts/research/diagnose_gliner_regex_interaction.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 
@@ -48,7 +53,7 @@ def normalize(s: str) -> str:
 
 def entity_matches(predicted_text: str, ground_truth: str) -> bool:
     """Case/whitespace-insensitive containment either direction -- same
-    definition gliner_sanity_check.py uses for "loose recall"."""
+    definition scripts/research/gliner_sanity_check.py uses for "loose recall"."""
     p, g = normalize(predicted_text), normalize(ground_truth)
     return g in p or p in g
 
@@ -83,7 +88,7 @@ def main():
                 shape, text, pii, parts, messages = generate_benchmark_case(rng, industry, mode)
 
                 # Condition A: GLiNER on RAW text -- matches how
-                # gliner_sanity_check.py actually measured recall.
+                # scripts/research/gliner_sanity_check.py actually measured recall.
                 raw_result = redactor.redact(text)
 
                 # Condition B: GLiNER on regex-redacted text -- matches
@@ -130,7 +135,7 @@ def main():
         print(
             "\nNOT confirmed here -- raw vs. post-regex recall are close for "
             "GLiNER specifically. The in-pipeline-vs-standalone gap likely has "
-            "a different cause (e.g. worth double-checking benchmark_tonst.py's "
+            "a different cause (e.g. worth double-checking benchmarks/benchmark_tonst.py's "
             "own ground-truth check against this script's field-level breakdown "
             "for a mismatch in what counts as a 'hit')."
         )

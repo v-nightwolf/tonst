@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-test_gliner_concurrency.py
+scripts/research/test_gliner_concurrency.py
 -----------------------------
 gliner_redact.py's module-level _MODEL_CACHE means every GlinerRedactor
 instance across the whole process shares ONE loaded GLiNER model object
 (that's the fix for the reload-cost bug -- see the cache comment in
-gliner_redact.py). benchmark_tonst.py's real, production-shaped usage
+gliner_redact.py). benchmarks/benchmark_tonst.py's real, production-shaped usage
 calls .redact() from multiple ThreadPoolExecutor worker threads
 concurrently (default --workers 4) against that SAME shared model. This
 has never been tested -- every full-pipeline benchmark run so far used
@@ -36,8 +36,13 @@ underlying forward pass. This script tests directly for BOTH:
 
 Usage:
     cd ~/Desktop/tonst
-    python3 test_gliner_concurrency.py
+    python3 scripts/research/test_gliner_concurrency.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import concurrent.futures
 import re
 import sys
@@ -50,7 +55,7 @@ from tonst.gliner_redact import GlinerRedactor
 NUM_TEXTS = 40          # distinct, uniquely-identifiable cases
 NUM_ROUNDS = 5          # repeat the full concurrent sweep this many times
                         # -- races are often intermittent, one pass can miss them
-WORKERS = 16            # deliberately higher than benchmark_tonst.py's default 4,
+WORKERS = 16            # deliberately higher than benchmarks/benchmark_tonst.py's default 4,
                         # to make a real race more likely to surface, not less
 
 

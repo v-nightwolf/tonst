@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-inspect_supervised_codename_misses.py
+scripts/research/inspect_supervised_codename_misses.py
 ---------------------------------------
-diagnose_gliner_by_shape.py found something new and separate from the
+scripts/research/diagnose_gliner_by_shape.py found something new and separate from the
 messages-path routing bug: codename recall in supervised_extraction
 (24.32%) and supervised_few_shot (26.42%) is far below full_name/company
 in the SAME rows (100%/100%) and far below codename recall in the
@@ -16,8 +16,13 @@ see the actual textual pattern instead of guessing at it.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 inspect_supervised_codename_misses.py
+    python3 scripts/research/inspect_supervised_codename_misses.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 
@@ -50,7 +55,7 @@ def main():
     industries = list(INDUSTRY_CONFIGS.keys())
     modes = ["supervised", "unsupervised"]
     iterations = 180
-    seed = 42  # same scheme as diagnose_gliner_by_shape.py / the real benchmark
+    seed = 42  # same scheme as scripts/research/diagnose_gliner_by_shape.py / the real benchmark
 
     misses = []
     hits_sample = []

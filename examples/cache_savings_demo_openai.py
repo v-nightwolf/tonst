@@ -1,8 +1,8 @@
 """
-cache_savings_demo_openai.py
+examples/cache_savings_demo_openai.py
 ------------------------------
 Measures REAL prompt-caching savings against the actual api.openai.com
-endpoint -- the OpenAI sibling of cache_savings_demo_anthropic.py. Same
+endpoint -- the OpenAI sibling of examples/cache_savings_demo_anthropic.py. Same
 pattern, different provider: build an eligible request, call the real
 API twice with an identical stable prefix, parse the real `usage` field
 from both responses, and print the measured cost difference using
@@ -19,10 +19,10 @@ count is the actual signal to watch.
 
 Setup:
     1. Get an API key from https://platform.openai.com/api-keys
-    2. Put it in a .env file in this directory (gitignored):
+    2. Put it in a .env file in the repository root (gitignored):
            OPENAI_API_KEY=sk-...
        or export it directly in your shell.
-    3. python3 cache_savings_demo_openai.py
+    3. python3 examples/cache_savings_demo_openai.py
 
 What you should see: call 1's cached_tokens should be 0 or small (the
 prefix hasn't been seen before). Call 2, sent seconds later with the
@@ -30,6 +30,9 @@ IDENTICAL stable prefix, should show cached_tokens > 0, credited in
 multiples of 128 tokens above the 1,024-token floor -- that's the real,
 measured discount.
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import subprocess
@@ -52,7 +55,7 @@ def _ensure_dependencies():
 
 
 def _load_dotenv_if_present():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path) as f:
@@ -74,7 +77,7 @@ from tonst.providers import openai as openai_provider
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 MODEL = "gpt-4o"  # flat 1,024-token cache minimum -- see providers.openai.CACHE_MINIMUM_TOKENS
 
-# Reused verbatim from cache_savings_demo_anthropic.py: the same
+# Reused verbatim from examples/cache_savings_demo_anthropic.py: the same
 # ~1,560-token (chars/4 estimate) reference doc that measured 1,547 real
 # input tokens against Anthropic's tokenizer -- comfortably above
 # OpenAI's flat 1,024-token minimum too, real tokenizer differences

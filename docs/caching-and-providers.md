@@ -74,7 +74,7 @@ body = build_anthropic_cache_request(redacted.parts, model="claude-sonnet-4-6")
 
 ## Testing against a real provider
 
-`real_api_demo.py` and `demo.py` prove the pipeline is wired correctly,
+`examples/real_api_demo.py` and `examples/demo.py` prove the pipeline is wired correctly,
 but neither one tells you whether prompt caching actually saved
 anything — that requires a stable prefix past the per-model minimum
 (see [Prompt-caching structuring](#prompt-caching-structuring)) and reading the real `usage`
@@ -84,11 +84,11 @@ each needs its own base URL, auth scheme, and request/response shape:
 
 | Script | Provider | Needs |
 |---|---|---|
-| `cache_savings_demo_anthropic.py` | Anthropic (`api.anthropic.com`) | `ANTHROPIC_API_KEY` |
-| `cache_savings_demo_openai.py` | OpenAI (`api.openai.com`) | `OPENAI_API_KEY` |
-| `cache_savings_demo_gemini.py` | Gemini (`generativelanguage.googleapis.com`), *implicit* caching (automatic, best-effort) | `GEMINI_API_KEY` |
-| `cache_savings_demo_gemini_explicit.py` | Gemini, *explicit* `CachedContent` caching (deterministic — a guaranteed hit, not best-effort) | `GEMINI_API_KEY` + billing enabled on that key's project |
-| `cache_savings_demo_generic.py` | **Any other provider** — Mistral, Groq, Together, DeepSeek, a self-hosted server, etc. | Runs with no key at all in its default dry-run mode; see below to point it at a real one. |
+| `examples/cache_savings_demo_anthropic.py` | Anthropic (`api.anthropic.com`) | `ANTHROPIC_API_KEY` |
+| `examples/cache_savings_demo_openai.py` | OpenAI (`api.openai.com`) | `OPENAI_API_KEY` |
+| `examples/cache_savings_demo_gemini.py` | Gemini (`generativelanguage.googleapis.com`), *implicit* caching (automatic, best-effort) | `GEMINI_API_KEY` |
+| `examples/cache_savings_demo_gemini_explicit.py` | Gemini, *explicit* `CachedContent` caching (deterministic — a guaranteed hit, not best-effort) | `GEMINI_API_KEY` + billing enabled on that key's project |
+| `examples/cache_savings_demo_generic.py` | **Any other provider** — Mistral, Groq, Together, DeepSeek, a self-hosted server, etc. | Runs with no key at all in its default dry-run mode; see below to point it at a real one. |
 
 All five follow the identical overall pattern — build an eligible
 request, call the real API against an identical stable prefix, parse
@@ -100,7 +100,7 @@ provider and run it, e.g.:
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 # or: echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env   (gitignored)
-python3 cache_savings_demo_anthropic.py
+python3 examples/cache_savings_demo_anthropic.py
 ```
 
 Expect call 1 to show a cache write (a new cache entry created) and
@@ -110,7 +110,7 @@ a cache read. If call 2 doesn't show a hit, something real may be wrong
 enabled for that model/account) and is worth chasing down before
 relying on this feature in production — **except on Gemini**, where a
 miss on the implicit path is a genuinely possible, documented, best-
-effort outcome, not necessarily a bug; see `cache_savings_demo_gemini.py`'s
+effort outcome, not necessarily a bug; see `examples/cache_savings_demo_gemini.py`'s
 own docstring.
 
 **Gemini specifically: check billing before chasing anything else, and
@@ -124,7 +124,7 @@ key's Google AI Studio / Cloud project before suspecting anything else
 produces. Separately, even with billing enabled, implicit caching
 missed on every one of 18 real test calls in this project — if you need
 the savings to reliably show up rather than just theoretically exist,
-run `cache_savings_demo_gemini_explicit.py` instead, which got a
+run `examples/cache_savings_demo_gemini_explicit.py` instead, which got a
 guaranteed hit on 3/3 calls in the same testing.
 
 **Anthropic — confirmed against the real API on 2026-09-09**
@@ -193,7 +193,7 @@ cached portion changes.
 ### Testing against any other provider
 
 For a provider none of the named provider scripts cover,
-`cache_savings_demo_generic.py` is a runnable template, not a
+`examples/cache_savings_demo_generic.py` is a runnable template, not a
 throwaway example: it uses `tonst.providers.generic.GenericCacheConfig`
 (see [Any other provider](#any-other-provider)) and works out of the box with
 `DRY_RUN = True` (the default) against a mocked response, so you can
@@ -205,10 +205,10 @@ with a real one, flip `DRY_RUN = False`) turn it into a real live test
 against your provider and your key:
 
 ```bash
-python3 cache_savings_demo_generic.py   # dry run, no key needed, works immediately
+python3 examples/cache_savings_demo_generic.py   # dry run, no key needed, works immediately
 # then edit the 3 TODOs in the file, set DRY_RUN = False, and:
 export MY_PROVIDER_API_KEY=...
-python3 cache_savings_demo_generic.py   # now calling your real provider
+python3 examples/cache_savings_demo_generic.py   # now calling your real provider
 ```
 
 ## Multi-provider support
@@ -333,7 +333,7 @@ confirmed against the real API (see [Testing against a real
 provider](#testing-against-a-real-provider)). Gemini has been tested live
 too: the implicit-caching benchmark in [results](results.md#measured-results)
 (`gemini-3.1-flash-lite`, 24 calls) and the September 2026 tool and
-compaction runs (`gemini-3.8-flash`, `live_test_gemini.py`). The OpenAI
+compaction runs (`gemini-3.8-flash`, `benchmarks/live_test_gemini.py`). The OpenAI
 module was built from OpenAI's current documentation and is consistent
 with it, but has **not** been run against a real OpenAI key yet. A few
 specific things are worth verifying before depending on them in

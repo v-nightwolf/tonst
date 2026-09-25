@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gliner_sanity_check.py
+scripts/research/gliner_sanity_check.py
 -----------------------
 Standalone sanity check: how well does a zero-shot GLiNER model catch
 the free-text PII fields (full_name, company, codename) that tonst's
@@ -8,12 +8,12 @@ regex layer does NOT cover -- the exact gap redact_llm.py's Ollama-based
 enhanced redaction was built for -- before committing to a GLiNER
 integration.
 
-Reuses the SAME synthetic-case generator as benchmark_tonst.py
+Reuses the SAME synthetic-case generator as benchmarks/benchmark_tonst.py
 (generate_benchmark_case / INDUSTRY_CONFIGS) rather than reimplementing
 it, so results are directly comparable to the existing Ollama-based
 numbers in research/colab-benchmark-findings.md, on the same 6
 industries x 2 paradigms shape. Must be run from the same directory as
-benchmark_tonst.py (imports it directly).
+benchmarks/benchmark_tonst.py (imports it directly).
 
 Why run this before integrating: redact_llm.py (Ollama + llama3.2:1b)
 has an entire multi-session history of bugs that all trace back to it
@@ -31,7 +31,7 @@ no T4 required).
 
 Usage:
     pip install gliner
-    python3 gliner_sanity_check.py --iterations-per-cell 15
+    python3 scripts/research/gliner_sanity_check.py --iterations-per-cell 15
 
 First run downloads the model checkpoint from Hugging Face (small model,
 should be well under 1GB) -- needs real internet access. If you're
@@ -43,6 +43,11 @@ instead, both of which already work for the rest of this project's
 Ollama benchmarking.
 """
 from __future__ import annotations
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import argparse
 import json
 import random
@@ -53,7 +58,7 @@ from typing import Dict, List
 
 from benchmark_tonst import INDUSTRY_CONFIGS, generate_benchmark_case
 
-# Fields NOT covered by tonst's regex layer or by benchmark_tonst.py's
+# Fields NOT covered by tonst's regex layer or by benchmarks/benchmark_tonst.py's
 # own gt_keys leak-check (email/card/phone/ip) -- these are exactly what
 # redact_llm.py's free-text LLM pass, and now GLiNER, exist to catch.
 FREE_TEXT_FIELDS = ("full_name", "company", "codename")

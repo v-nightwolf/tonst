@@ -47,7 +47,7 @@ DEFAULT_MODEL = "urchade/gliner_medium-v2.1"
 # go), GLiNER is an in-process model with no separate server -- if the
 # loaded weights are cached only on a GlinerRedactor INSTANCE, every
 # caller that constructs a fresh TonstClient per call/request (a common
-# pattern, and exactly what benchmark_tonst.py's run_single_iteration()
+# pattern, and exactly what benchmarks/benchmark_tonst.py's run_single_iteration()
 # does) reloads the model from disk every single time. Found 2026-09-13
 # via a live benchmark: redaction latency landed at a suspiciously flat
 # ~6.1-6.4s p50 across every industry/shape (the signature of a fixed

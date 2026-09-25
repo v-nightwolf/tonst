@@ -10,7 +10,7 @@ Three kinds of measurement appear below, and each table says which it is:
 
 - **Live API**: real calls to Anthropic or Gemini, with the provider's billed usage. This covers the prompt-caching benchmark (24 Gemini calls), the September 2026 tool-filtering and compaction runs, and the single-prompt check.
 - **Local pipeline**: tonst's own redaction, trimming and compression run for real on 360 prompts, with the paid API call mocked. Token counts, PII recall and latency are measured. Dollar figures are estimates at a fixed $3 per million input tokens.
-- **Simulation**: the offline cost model in `benchmark_free_features.py`, calibrated against the live runs. It's used only where a live run would be too expensive, and is labelled wherever it appears.
+- **Simulation**: the offline cost model in `benchmarks/benchmark_free_features.py`, calibrated against the live runs. It's used only where a live run would be too expensive, and is labelled wherever it appears.
 
 | Mechanism | Scope & Scale | Peak Savings | Workload Average | Key Reliability / Safety Metric |
 |---|---|---|---|---|
@@ -23,8 +23,8 @@ Three kinds of measurement appear below, and each table says which it is:
 
 ### Free features on live APIs (Claude Sonnet 4.6 + Gemini 3.8 Flash, September 2026)
 
-These are real API calls with billed usage, from `live_test_free_features.py`
-(Anthropic) and `live_test_gemini.py` (Gemini). The same 30 tool tasks and
+These are real API calls with billed usage, from `benchmarks/live_test_free_features.py`
+(Anthropic) and `benchmarks/live_test_gemini.py` (Gemini). The same 30 tool tasks and
 the same scripted support conversation were used on both providers. Details
 and every intermediate run are in [Tool definitions](tools-and-rag.md#tool-and-mcp-definition-optimization),
 [Rolling compaction](compaction.md#rolling-compaction) and [ROADMAP.md](../ROADMAP.md).
@@ -86,7 +86,7 @@ measured mechanical trim + regex-only redaction (no enhanced backend, no
 compression) -- see `research/gliner-sanity-check-findings.md` for that
 superseded run's numbers. This run was produced on a Google Colab T4 GPU
 instance via `tonst_gliner_full_benchmark.ipynb`, using
-`benchmark_tonst.py`'s built-in mocked "paid API" call -- so the token
+`benchmarks/benchmark_tonst.py`'s built-in mocked "paid API" call -- so the token
 and PII-recall numbers below are real, but the dollar figure is still an
 estimate against a hardcoded $3/M rate, not a real invoice (see
 `research/colab-benchmark-findings.md`'s "Cost benchmarking" section).
@@ -161,7 +161,7 @@ The 0% result on the short prompt is intentionally included here, not hidden —
 
 At real traffic volumes the fractions of a cent above add up: an app sending 100,000 requests/day with this same 50-token, 26.9% overhead would save an estimated **$15.00/day, or about $5,475/year**, on this one mechanical trimming pass alone — before any prompt-caching savings on top of it.
 
-Reproduce this yourself with `real_api_demo.py` (see below).
+Reproduce this yourself with `examples/real_api_demo.py` (see below).
 
 **Live Header Verification**
 * **Anthropic (`api.anthropic.com`)**: Real call execution returns `cache_read_input_tokens` and `cache_creation_input_tokens` in the raw usage response header, confirming that cache breakpoints (`cache_control`) successfully shift tokens from full input pricing ($3.00/1M) to cached read pricing ($0.30/1M).
@@ -169,7 +169,7 @@ Reproduce this yourself with `real_api_demo.py` (see below).
 
 ## Free-feature benchmark (offline)
 
-`benchmark_free_features.py` runs without a network or Ollama and writes
+`benchmarks/benchmark_free_features.py` runs without a network or Ollama and writes
 `free_features_benchmark.json`. The workloads are **hand-built to look
 realistic, not captured from real traffic**: 36 GitHub/Slack/Jira/
 filesystem/database-style tools, 30 tasks with known required tools (6
@@ -188,7 +188,7 @@ counts are chars/4 estimates.
 
 To measure the same things against the real Anthropic API (billed
 tokens, real cache reads, and whether Claude still picks the right tool),
-run `python3 live_test_free_features.py` with `ANTHROPIC_API_KEY` set.
+run `python3 benchmarks/live_test_free_features.py` with `ANTHROPIC_API_KEY` set.
 
 **Live results** (2026-09-24, `claude-sonnet-4-6`, all 30 tasks: 24
 direct, 6 paraphrased; real billed tokens; second full run, after the
@@ -234,7 +234,7 @@ loading makes sense only when even a filtered list would be large
 (hundreds of tools, several MCP servers). There, use tonst's defaults
 (search-type tools loaded, plus `DEFERRED_TOOLS_SYSTEM_HINT`) and pin
 your most-used tools with `always_loaded`. Re-run
-`live_test_free_features.py` on your own tool list before relying on
+`benchmarks/live_test_free_features.py` on your own tool list before relying on
 either.
 
 The compaction row is the clearest example of why raw tokens mislead:

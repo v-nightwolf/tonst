@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-debug_redaction_corruption.py
+scripts/research/debug_redaction_corruption.py
 ------------------------------
 Both gemma2:2b full-pipeline sanity runs (--workers 4 AND --workers 1)
 showed a much higher round_trip_restoration_failure rate (10% and 55%
 respectively) than the earlier direct guard-rail stress test
-(stress_test_live_guardrails.py: 0/40 compression corruptions), and the
+(scripts/research/stress_test_live_guardrails.py: 0/40 compression corruptions), and the
 --workers 1 run (no contention at all) also showed avg_redacted_fields_
 per_call nearly doubling (8.9 vs. the historical ~5.2-5.6 baseline for
 5 regex fields + occasional free-text catches). That combination points
@@ -20,7 +20,7 @@ into gemma2:2b's own compression.
 
 This script reproduces the EXACT same benchmark cases run_benchmark()
 generates for a given --iterations/--seed (same industry/mode cycling
-logic copied directly from benchmark_tonst.py, idx 0..N-1) but
+logic copied directly from benchmarks/benchmark_tonst.py, idx 0..N-1) but
 SEQUENTIALLY (no threading, so contention/--workers is not a factor)
 and with instrumentation TonstClient doesn't expose:
   - monkeypatches tonst.redact_llm's model-call hook to log gemma's RAW
@@ -35,9 +35,14 @@ and with instrumentation TonstClient doesn't expose:
     is visible, not just a count.
 
 Usage:
-    python3 debug_redaction_corruption.py --model gemma2:2b --iterations 60
+    python3 scripts/research/debug_redaction_corruption.py --model gemma2:2b --iterations 60
 """
 from __future__ import annotations
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import argparse
 import json
 import random

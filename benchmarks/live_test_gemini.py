@@ -1,7 +1,7 @@
 """
-live_test_gemini.py
+benchmarks/live_test_gemini.py
 -------------------
-The same live checks as live_test_free_features.py, against Google's
+The same live checks as benchmarks/live_test_free_features.py, against Google's
 Gemini API instead of Anthropic's. Costs real money (the script prints an
 upper-bound estimate and asks before spending).
 
@@ -35,13 +35,17 @@ Part 2 -- compaction (long history, ~500 tokens of tool output per reply):
   summarizer's own calls; fact recall as in the Anthropic run.
 
 Setup: GEMINI_API_KEY in .env (or the environment).
-Run:   python3 live_test_gemini.py                      # both parts, gemini-3.8-flash
-       python3 live_test_gemini.py --part tools --tasks 5
-       python3 live_test_gemini.py --model gemini-3.1-pro-preview
+Run:   python3 benchmarks/live_test_gemini.py                      # both parts, gemini-3.8-flash
+       python3 benchmarks/live_test_gemini.py --part tools --tasks 5
+       python3 benchmarks/live_test_gemini.py --model gemini-3.1-pro-preview
 Results: live_test_gemini_results.json
 """
 
 from __future__ import annotations
+# Run from anywhere: make the repo root (and this folder) importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import argparse
 import json
 import os

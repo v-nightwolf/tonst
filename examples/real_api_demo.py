@@ -1,20 +1,23 @@
 """
-real_api_demo.py
+examples/real_api_demo.py
 ----------------
 Wires TonstClient to the REAL Claude API (api.anthropic.com), not a mock.
 Everything upstream of the actual HTTP call -- redaction and trimming --
-runs exactly as it does in demo.py. Only `call_fn` changes.
+runs exactly as it does in examples/demo.py. Only `call_fn` changes.
 
 Setup:
     1. Get an API key from https://console.anthropic.com
     2. export ANTHROPIC_API_KEY=sk-ant-...
-    3. python3 real_api_demo.py
+    3. python3 examples/real_api_demo.py
 
 If ANTHROPIC_API_KEY isn't set, or is invalid, you'll get a clean
 "authentication_error" from Anthropic's API rather than a code crash --
 that confirms the integration is wired correctly even before you have
 a working key.
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import sys

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-diagnose_placeholder_inflation.py
+scripts/research/diagnose_placeholder_inflation.py
 -----------------------------------
 Run this on your Mac (needs Ollama running + gemma2:2b pulled, same as
 the other diagnostics). Answers the question behind "why does the full
@@ -22,8 +22,13 @@ counts -- not estimated.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 diagnose_placeholder_inflation.py
+    python3 scripts/research/diagnose_placeholder_inflation.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 import time
@@ -40,7 +45,7 @@ from benchmark_tonst import generate_benchmark_case
 # (rng.choice([...])), so reusing one seed across every case (the bug in
 # the first version of this script) deterministically redraws the SAME
 # shape every time regardless of industry. These seeds were verified
-# directly against benchmark_tonst.py to cover all 5 real shapes at least
+# directly against benchmarks/benchmark_tonst.py to cover all 5 real shapes at least
 # once: the 2 supervised shapes, and critically all 3 unsupervised shapes
 # -- including unsupervised_bloated_logs and unsupervised_verbose_dump,
 # which are the two shapes that deliberately repeat a contact block/jargon

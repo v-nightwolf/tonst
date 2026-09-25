@@ -5,7 +5,7 @@ Optional, near-exact token counting, as an alternative to trim.py's
 chars/4 estimate.
 
 Why this exists: a live test against the real Anthropic API
-(live_test_free_features.py, 2026-09-24) found real billed input was
+(benchmarks/live_test_free_features.py, 2026-09-24) found real billed input was
 ~1.8x tonst's chars/4 estimate on tool-calling requests. Two reasons:
 Anthropic adds a hidden tool-use system prompt (a few hundred tokens)
 whenever tools are present, and JSON tool schemas produce more tokens per

@@ -1,5 +1,5 @@
 """
-cache_savings_demo_generic.py
+examples/cache_savings_demo_generic.py
 --------------------------------
 A TEMPLATE for measuring real prompt-caching savings against ANY
 provider tonst doesn't have a dedicated script for -- Mistral, Groq,
@@ -11,7 +11,7 @@ script that can only test one more named provider, this one is
 runnable AS-IS out of the box (see DRY_RUN below) and documents exactly
 what to change to point it at a REAL provider and a REAL key.
 
-Unlike cache_savings_demo_anthropic.py / _openai.py / _gemini.py, this
+Unlike examples/cache_savings_demo_anthropic.py / _openai.py / _gemini.py, this
 script does NOT call a real API by default -- there is no "the generic
 provider" to call. Run it unmodified and it exercises the full
 tonst.providers.generic pipeline (eligibility check, request building,
@@ -28,8 +28,11 @@ and just see the pattern demonstrated):
     2. Replace call_provider() below with a real HTTP call to your
        provider's endpoint and auth scheme.
     3. Set DRY_RUN = False, put your API key in a .env file or export
-       it, and run: python3 cache_savings_demo_generic.py
+       it, and run: python3 examples/cache_savings_demo_generic.py
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import subprocess
@@ -54,7 +57,7 @@ def _ensure_dependencies():
 
 
 def _load_dotenv_if_present():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path) as f:

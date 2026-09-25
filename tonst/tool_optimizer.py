@@ -41,7 +41,7 @@ Two strategies, because providers differ:
        fewer than min_matched_terms (default 2) distinct words with the
        request, the match is treated as a coincidence and NOTHING is
        filtered (fell_back=True) -- "can't tell" never becomes "drop
-       everything". In benchmark_free_features.py this rule took recall
+       everything". In benchmarks/benchmark_free_features.py this rule took recall
        on deliberately paraphrased requests from 50% to 100%, at the
        cost of sending the full tool list for those requests.
      - Lexical matching can't see synonyms ("ping the team" vs. a

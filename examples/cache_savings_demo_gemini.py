@@ -1,9 +1,9 @@
 """
-cache_savings_demo_gemini.py
+examples/cache_savings_demo_gemini.py
 ------------------------------
 Measures REAL prompt-caching savings against the actual Gemini API
 (generativelanguage.googleapis.com) -- the Gemini sibling of
-cache_savings_demo_anthropic.py and cache_savings_demo_openai.py. Same
+examples/cache_savings_demo_anthropic.py and examples/cache_savings_demo_openai.py. Same
 overall pattern: build an eligible request, call the real API twice
 with an identical stable prefix, parse the real `usageMetadata` field
 from both responses, and print the measured cost difference using
@@ -42,10 +42,10 @@ Setup:
        this script shapes the request. See providers/gemini.py's
        module docstring for the exact error this produces if you try
        explicit caching on a free-tier key.
-    3. Put it in a .env file in this directory (gitignored):
+    3. Put it in a .env file in the repository root (gitignored):
            GEMINI_API_KEY=AI...
        or export it directly in your shell.
-    4. python3 cache_savings_demo_gemini.py
+    4. python3 examples/cache_savings_demo_gemini.py
 
 What you should see (assuming billing is enabled -- see step 2): call
 1's cachedContentTokenCount will likely be 0 (nothing to reuse yet).
@@ -57,6 +57,9 @@ documented behavior, not this script failing. If you see 0 on every
 call including several retries, suspect the free-tier quota first --
 it's a far more common cause than bad luck on a best-effort mechanism.
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import subprocess
@@ -79,7 +82,7 @@ def _ensure_dependencies():
 
 
 def _load_dotenv_if_present():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path) as f:
@@ -603,7 +606,7 @@ def main():
             "active for this model/account. For a GUARANTEED cache, use Gemini's "
             "explicit CachedContent path instead -- see providers/gemini.py's "
             "build_cached_content_resource() / build_generate_request_from_cache(), "
-            "or just run cache_savings_demo_gemini_explicit.py directly."
+            "or just run examples/cache_savings_demo_gemini_explicit.py directly."
         )
 
     print("\n" + "=" * 60)
@@ -629,7 +632,7 @@ def main():
             "\nIn plain terms: 0% real savings this run -- implicit caching did "
             "not activate on either call (a real, documented possible outcome, "
             "not a bug). For savings you can rely on every time, use "
-            "cache_savings_demo_gemini_explicit.py's guaranteed explicit-cache "
+            "examples/cache_savings_demo_gemini_explicit.py's guaranteed explicit-cache "
             "path instead."
         )
 

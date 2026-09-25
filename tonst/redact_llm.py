@@ -353,7 +353,7 @@ class LLMRedactor:
             placeholder = _placeholder_for(label, span)
             mapping[placeholder] = span
             # Replace EVERY occurrence of this span, not just one.
-            # BUG FOUND 2026-09-13 via diagnose_placeholder_inflation.py:
+            # BUG FOUND 2026-09-13 via scripts/research/diagnose_placeholder_inflation.py:
             # this used to be `.replace(span, placeholder, 1)` -- the
             # comment here previously assumed a repeated name would
             # appear as a SEPARATE list item per occurrence in the

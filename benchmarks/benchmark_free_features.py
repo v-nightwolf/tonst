@@ -1,5 +1,5 @@
 """
-benchmark_free_features.py
+benchmarks/benchmark_free_features.py
 --------------------------
 Offline, deterministic benchmark for the three free features whose value
 can be measured without a paid API call:
@@ -26,10 +26,14 @@ NOT captured from real traffic. The numbers show how the mechanisms
 behave, including where they fail (the paraphrased-task group is there
 on purpose). Token counts use tonst's chars/4 estimate.
 
-Run:  python benchmark_free_features.py   (no network, no Ollama needed)
+Run:  python benchmarks/benchmark_free_features.py   (no network, no Ollama needed)
 """
 
 from __future__ import annotations
+# Run from anywhere: make the repo root (and this folder) importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import json
 
 from tonst.tool_optimizer import select_tools, ToolSession, estimate_tool_tokens
@@ -169,7 +173,7 @@ TASKS = [
 # text -- and Claude correctly asked for the missing content, which was scored
 # as a miss). A few tasks have a second, genuinely reasonable FIRST step; the
 # live test counts these as correct, and says so in its output. Used only by
-# live_test_free_features.py -- the offline benchmark measures whether the
+# benchmarks/live_test_free_features.py -- the offline benchmark measures whether the
 # needed tools were KEPT, not which one the model calls first.
 ACCEPTABLE_FIRST_STEPS = {
     "Run a SQL query counting signups per day last week in the analytics database": ["sql_list_tables"],

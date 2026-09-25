@@ -1,5 +1,5 @@
 """
-_diagnose_local_model_latency.py
+scripts/research/_diagnose_local_model_latency.py
 ---------------------------------
 TEMPORARY diagnostic script -- not part of the library, not imported by
 anything, safe to delete once you're done. Written to directly answer
@@ -36,9 +36,14 @@ What it does:
        maybe a smaller/faster model).
 
 Usage (in Colab, after Ollama is running and the model is pulled):
-    python3 _diagnose_local_model_latency.py
-    python3 _diagnose_local_model_latency.py --workers 8   # stress harder
+    python3 scripts/research/_diagnose_local_model_latency.py
+    python3 scripts/research/_diagnose_local_model_latency.py --workers 8   # stress harder
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 
 import argparse
 import logging

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-diagnose_local_llm_perf.py
+scripts/research/diagnose_local_llm_perf.py
 ---------------------------
 Run this directly in a normal Terminal window on your Mac (NOT through any
 sandboxed/bridge shell) with Ollama already running and gemma2:2b pulled.
@@ -16,10 +16,15 @@ Answers four questions before touching any tonst code:
 
 Usage:
     cd ~/Desktop/tonst
-    python3 diagnose_local_llm_perf.py
+    python3 scripts/research/diagnose_local_llm_perf.py
 
 Requires: `requests` (pip3 install requests --break-system-packages if missing)
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import json
 import subprocess
 import sys

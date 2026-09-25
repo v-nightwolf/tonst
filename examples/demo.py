@@ -1,5 +1,5 @@
 """
-demo.py
+examples/demo.py
 -------
 Runs the SDK against a MOCK paid-API function (no real network call, no
 API key needed) so you can see the pipeline and the reported savings,
@@ -8,9 +8,12 @@ plus a walkthrough of prompt-caching structuring.
 Swap `mock_paid_api_call` for a real call to Claude/OpenAI/etc. and this
 becomes a working integration -- nothing else about the SDK changes.
 
-Run: python3 demo.py
+Run: python3 examples/demo.py
 (No setup needed -- this bootstraps its own missing dependency below.)
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import json
 import subprocess

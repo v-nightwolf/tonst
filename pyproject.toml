@@ -28,3 +28,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["tonst*"]
+
+[tool.pytest.ini_options]
+# The unit tests live in test_tonst.py. scripts/research/test_*.py are one-off
+# research scripts that need GLiNER/Ollama, not unit tests.
+testpaths = ["test_tonst.py"]

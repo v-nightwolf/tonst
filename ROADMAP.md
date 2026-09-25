@@ -159,15 +159,15 @@ path was.
 
 ### Per-provider live-test scripts — shipped
 
-`cache_savings_demo.py` was renamed to `cache_savings_demo_anthropic.py`
-and given three siblings: `cache_savings_demo_openai.py`,
-`cache_savings_demo_gemini.py`, and `cache_savings_demo_generic.py` —
+`cache_savings_demo.py` was renamed to `examples/cache_savings_demo_anthropic.py`
+and given three siblings: `examples/cache_savings_demo_openai.py`,
+`examples/cache_savings_demo_gemini.py`, and `examples/cache_savings_demo_generic.py` —
 built in response to feedback that the original single script's setup
 instructions read as *the* way to test caching, when it was always
 Anthropic-specific. There is deliberately no single generic live-test
 script, because there is no single generic API to call — every provider
 needs its own base URL, auth scheme, and request/response shape.
-`cache_savings_demo_generic.py` is the closest thing: a template that
+`examples/cache_savings_demo_generic.py` is the closest thing: a template that
 runs out of the box in a mocked dry-run mode (proving the pipeline
 logic end to end with zero setup) and documents exactly which three
 edits point it at a real provider and a real key. See the README's
@@ -215,7 +215,7 @@ multi-turn "advance the breakpoint forward each turn" pattern, and
 `max_tokens=0` cache pre-warming. None of these are bugs — they're
 scope tonst hasn't covered yet — tracked here rather than assumed done.
 
-### Live-tested cache_savings_demo_gemini.py with a real key — three findings
+### Live-tested examples/cache_savings_demo_gemini.py with a real key — three findings
 
 Ran the Gemini demo against a real API key end to end (2-call demo, a
 6-call intensive aggregate run, and a direct explicit-caching probe).
@@ -315,8 +315,8 @@ assuming:
    that produced this result was cleaned up (fixed a `KeyError` where
    it assumed a response always has `candidates[0].content.parts` —
    a truncated/reasoning-heavy response can legitimately have neither)
-   and shipped as `cache_savings_demo_gemini_explicit.py`, the deterministic
-   sibling of `cache_savings_demo_gemini.py`. It imports that sibling's
+   and shipped as `examples/cache_savings_demo_gemini_explicit.py`, the deterministic
+   sibling of `examples/cache_savings_demo_gemini.py`. It imports that sibling's
    `REFERENCE_DOC`/`MODEL`/`GEMINI_API_KEY` rather than duplicating them.
    README's "Testing against a real provider" section and files table
    updated accordingly.
@@ -359,7 +359,7 @@ stays centered on the audit/compliance trail, team policy and support.
   The open-core line: this free log is deliberately *not* an audit
   record (no tamper-evidence or retention).
 
-**Offline benchmark** (`benchmark_free_features.py`, hand-built but
+**Offline benchmark** (`benchmarks/benchmark_free_features.py`, hand-built but
 realistic workloads, not real traffic; full table in the README):
 tool filtering reached 100% recall and 83% fewer tool tokens on direct
 requests (`top_k=5`, 36 tools). RAG dedupe alone cut 19% of context
@@ -394,7 +394,7 @@ Live measured: a ~1k-token fold took ~5s with gemma2:2b and the next
 turn reused it in 0 ms. The summary kept every key fact of the test
 conversation.
 
-`live_test_free_features.py` added: the real-API test for tools (all
+`benchmarks/live_test_free_features.py` added: the real-API test for tools (all
 vs. filtered vs. deferred, with a correct-tool check), rolling vs.
 stateless compaction cache reads, and estimate accuracy.
 
@@ -453,7 +453,7 @@ stateless compaction cache reads, and estimate accuracy.
 **Ollama num_ctx fix (found before it bit):** Ollama's default context (2k-4k) silently drops the START of longer prompts, so summaries at the 3,000-token threshold would have lost the oldest turns.
 - `tonst/ollama_util.py` sizes num_ctx per request, capped by TONST_OLLAMA_MAX_CTX (8192).
 - Compaction and compression refuse over-long prompts; LLM redaction warns.
-- `live_test_free_features.py --long` added: ~500-token tool outputs, history ~13k tokens at the real 3,000 threshold; modes none / rolling / rolling_bg.
+- `benchmarks/live_test_free_features.py --long` added: ~500-token tool outputs, history ~13k tokens at the real 3,000 threshold; modes none / rolling / rolling_bg.
 - 161/161 tests.
 
 **Long-history live run (12 turns, ~12.6k tokens):**
@@ -489,7 +489,7 @@ stateless compaction cache reads, and estimate accuracy.
 - 0% implicit cache hits: prompts (~2.9k tokens) were under Flash's 4,096 minimum.
 - chars/4 within 2% on Gemini (1.77× low on Claude).
 - countTokens exact 60/60 but ~320 ms per call; select_tools 2.3 ms. Run cost $0.11.
-- Added: `GeminiSummarizer`, `GeminiTokenCounter`, `compaction_cache_pricing` ("anthropic"/"gemini"/tuple), `live_test_gemini.py`, Gemini provider in the cost simulation. 180/180 tests.
+- Added: `GeminiSummarizer`, `GeminiTokenCounter`, `compaction_cache_pricing` ("anthropic"/"gemini"/tuple), `benchmarks/live_test_gemini.py`, Gemini provider in the cost simulation. 180/180 tests.
 
 **Gemini compaction, 20 turns (2026-09-25):**
 - none $0.1329 (35% cached); Flash-Lite summaries $0.1128 (−15.1%, 8/8 facts, p95 2.7 s vs 4.0 s); cache-aware $0.1389 (+4.5%).

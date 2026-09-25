@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-test_codename_label_wording.py
+scripts/research/test_codename_label_wording.py
 ---------------------------------
-inspect_supervised_codename_misses.py found that GLiNER's codename recall
+scripts/research/inspect_supervised_codename_misses.py found that GLiNER's codename recall
 tracks whether the ground-truth string literally contains a "Project"-style
 cue word, not whether it's contextually a codename. Confirmed against
-benchmark_tonst.py's own per-industry codename pools: industries whose
+benchmarks/benchmark_tonst.py's own per-industry codename pools: industries whose
 codenames never say "Project" (healthcare: Protocol/Trial/Study, finance:
 Strategy/Book/Ledger, aerospace: Mission/Payload/Vehicle) get gutted
 codename recall, while industries that do use "Project" get near-perfect
@@ -24,8 +24,13 @@ instead of just "Project X".
 
 Usage:
     cd ~/Desktop/tonst
-    python3 test_codename_label_wording.py
+    python3 scripts/research/test_codename_label_wording.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 

@@ -133,7 +133,7 @@ both modes):
   (vs. 1.77× low for JSON tool definitions).
 
 **Cost and latency against no compaction at all** (24 turns, threshold
-600, `live_test_free_features.py --part compaction`, 2026-09-24):
+600, `benchmarks/live_test_free_features.py --part compaction`, 2026-09-24):
 
 | | No compaction | Stateless | Rolling |
 |---|---|---|---|
@@ -158,7 +158,7 @@ both modes):
   needed when a conversation would overflow the model's context window.
   That's why the default `compaction_token_threshold` is 3,000 tokens:
   short chats are never compacted. To measure the long case, run
-  `live_test_free_features.py --part compaction --long` (~500 tokens of
+  `benchmarks/live_test_free_features.py --part compaction --long` (~500 tokens of
   tool output per reply, history reaching ~13k tokens, compared at the
   real 3,000-token default).
 
@@ -239,7 +239,7 @@ evening delivery slot, or the case number. That led to three additions:
   It only ever sees already-redacted text, costs well under a cent per
   summary (usage is tracked on the instance so it can be counted against
   the savings), and in background mode its latency never reaches the
-  user. The local model stays the default. `live_test_free_features.py
+  user. The local model stays the default. `benchmarks/live_test_free_features.py
   --long` now compares no compaction, local background and Haiku
   background, and scores **fact recall**: of the known facts in turns
   that were summarized, how many survive in summary + pinned references.
@@ -285,7 +285,7 @@ many again as the conversation has had so far.
 inside the context window. Reports show `history_fold_postponed`.
 
 Offline simulation of the live test's conversation (Haiku summaries,
-Sonnet 4.6 prices, cache rewrite modeled; `benchmark_free_features.py`,
+Sonnet 4.6 prices, cache rewrite modeled; `benchmarks/benchmark_free_features.py`,
 `cache_aware_compaction`). It's calibrated on the live run: it gives
 −4.2% at 24 turns, where the live run measured −2.7%.
 
@@ -328,7 +328,7 @@ at 12 turns and saves −17% at 40 and −54% at 100; cache-aware mode is 0%
 at 12 turns. There's no write surcharge, but uncached tokens and the
 summarizer are relatively more expensive, so it about evens out. The
 real unknown is how reliably implicit caching hits, and that's what
-`live_test_gemini.py` measures: tools (all vs. filtered), compaction
+`benchmarks/live_test_gemini.py` measures: tools (all vs. filtered), compaction
 (none / Flash-Lite summaries / cache-aware), cache-hit share,
 countTokens accuracy and latency.
 

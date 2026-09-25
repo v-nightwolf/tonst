@@ -108,7 +108,7 @@ def matched_terms(query: str, document: str) -> int:
     confidence check on top of BM25: a best match that shares only one
     word with the request is usually a coincidence ("book a SLOT" vs. a
     "find free time slots" tool), not a real match -- see
-    benchmark_free_features.py, where every wrong pick had exactly one
+    benchmarks/benchmark_free_features.py, where every wrong pick had exactly one
     shared word and every right pick but one had two or more.
     """
     return len(set(tokenize(query)) & set(tokenize(document)))

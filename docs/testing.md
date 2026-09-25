@@ -7,7 +7,7 @@ How to run the unit tests, demos, offline benchmark and live API tests, and what
 ## Running the demo
 
 ```bash
-python3 demo.py
+python3 examples/demo.py
 ```
 
 You should see PII stripped before the "paid API" ever saw it, and a
@@ -32,14 +32,14 @@ Actions (`.github/workflows/tests.yml`) across Python 3.9–3.12.
 
 ## Running the real API test
 
-`real_api_demo.py` wires `TonstClient` to the actual `api.anthropic.com`
+`examples/real_api_demo.py` wires `TonstClient` to the actual `api.anthropic.com`
 endpoint — not a mock. Confirmed in testing: without a key it reaches
 the real API and fails with a clean `authentication_error`, proving the
 request format (endpoint, headers, JSON body) is correct end-to-end.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # from console.anthropic.com
-python3 real_api_demo.py
+python3 examples/real_api_demo.py
 ```
 
 With no key set, you'll see the same clean auth failure this was tested
@@ -65,18 +65,18 @@ Add your real key to see an actual response, redaction, and token savings.
 | `tonst/rag.py` | `optimize_chunks()`: de-duplication and optional relevance/budget filtering of retrieved RAG chunks. Used by `TonstClient.query_rag()`. |
 | `tonst/relevance.py` | Dependency-free BM25 scoring and near-duplicate detection, shared by the two modules above. |
 | `tonst/savings_log.py` / `tonst/__main__.py` | Opt-in local savings log and the `tonst stats` command. See [Savings log](measurement.md#savings-log). |
-| `live_test_free_features.py` | Live test against the real Anthropic API: real billed tokens for all tools vs. `select_tools()` vs. Anthropic deferred loading (plus whether Claude still calls the right tool, with the stop reason, reply text and tool-search results saved for every miss), real cache reads for rolling vs. stateless compaction, and how close the chars/4 estimate and the `count_tokens` endpoint are to billed tokens. Asks before spending; about $1 at Sonnet 4.6 prices. Results in `live_test_results.json`. |
+| `benchmarks/live_test_free_features.py` | Live test against the real Anthropic API: real billed tokens for all tools vs. `select_tools()` vs. Anthropic deferred loading (plus whether Claude still calls the right tool, with the stop reason, reply text and tool-search results saved for every miss), real cache reads for rolling vs. stateless compaction, and how close the chars/4 estimate and the `count_tokens` endpoint are to billed tokens. Asks before spending; about $1 at Sonnet 4.6 prices. Results in `live_test_results.json`. |
 | `tonst/summarizers.py` | `AnthropicSummarizer` (Claude Haiku) and `GeminiSummarizer` (Gemini Flash-Lite): optional API summarizers for history compaction (redacted text only, usage/cost tracked). See [Rolling compaction](compaction.md#rolling-compaction). |
 | `tonst/ollama_util.py` | Sizes Ollama's context window (`num_ctx`) per request so long prompts aren't silently truncated.  |
 | `tonst/token_count.py` | `AnthropicTokenCounter` and `GeminiTokenCounter`: optional exact token counts via each provider's free counting endpoint. See [Exact token counts](measurement.md#exact-token-counts). |
 | `tonst/adapters.py` | Converts tonst's message list to Anthropic / OpenAI / Gemini request shapes (with prompt-caching markers for Anthropic) and reads each provider's usage block back, for `TonstClient(messages_fn=...)`. |
-| `live_test_gemini.py` | The same live checks against the Gemini API: all tools vs. `select_tools()`, rolling compaction with Gemini Flash-Lite summaries and cache-aware mode, implicit cache hits, countTokens accuracy and latency. Prints an upper-bound cost estimate and asks first. Results in `live_test_gemini_results.json`. |
-| `benchmark_free_features.py` | Offline benchmark for tool filtering, RAG chunk optimization and rolling compaction; plus the cache-aware compaction cost simulation for Anthropic and Gemini prices; results in `free_features_benchmark.json`. See [Free-feature benchmark](results.md#free-feature-benchmark-offline). |
+| `benchmarks/live_test_gemini.py` | The same live checks against the Gemini API: all tools vs. `select_tools()`, rolling compaction with Gemini Flash-Lite summaries and cache-aware mode, implicit cache hits, countTokens accuracy and latency. Prints an upper-bound cost estimate and asks first. Results in `live_test_gemini_results.json`. |
+| `benchmarks/benchmark_free_features.py` | Offline benchmark for tool filtering, RAG chunk optimization and rolling compaction; plus the cache-aware compaction cost simulation for Anthropic and Gemini prices; results in `free_features_benchmark.json`. See [Free-feature benchmark](results.md#free-feature-benchmark-offline). |
 | `tonst/client.py` | `TonstClient` — the public SDK surface that ties it all together. |
-| `demo.py` | Runnable demo against a mocked paid API call — no API key or network needed. Covers both the basic pipeline and prompt-caching structuring. |
-| `real_api_demo.py` | Real integration test against the actual `api.anthropic.com` endpoint — see [Running the real API test](#running-the-real-api-test). |
-| `cache_savings_demo_anthropic.py` | Measures REAL prompt-caching savings against `api.anthropic.com` using a realistically large reference document (clears the per-model minimum), printing actual `cache_creation_input_tokens` / `cache_read_input_tokens` from two consecutive calls. |
-| `cache_savings_demo_openai.py` | The same live-measurement pattern against `api.openai.com`, using `providers/openai.py`'s automatic-caching request shape and per-model discount table. |
-| `cache_savings_demo_gemini.py` | The same pattern against the real Gemini API, testing the *implicit* (automatic, best-effort) caching path via `providers/gemini.py`. |
-| `cache_savings_demo_gemini_explicit.py` | Gemini's *explicit* `CachedContent` path — deterministic, not best-effort. Creates a cache resource, then references it across several calls. Exists because live testing found implicit caching missed 18/18 real calls while explicit hit 3/3 (later 4/4) the moment billing was enabled; see `providers/gemini.py`'s docstring and `ROADMAP.md` for the full numbers. |
-| `cache_savings_demo_generic.py` | A runnable **template** for testing prompt caching against any provider tonst has no dedicated script for — works out of the box in a mocked dry-run mode; three clearly marked edits point it at a real provider and a real key. |
+| `examples/demo.py` | Runnable demo against a mocked paid API call — no API key or network needed. Covers both the basic pipeline and prompt-caching structuring. |
+| `examples/real_api_demo.py` | Real integration test against the actual `api.anthropic.com` endpoint — see [Running the real API test](#running-the-real-api-test). |
+| `examples/cache_savings_demo_anthropic.py` | Measures REAL prompt-caching savings against `api.anthropic.com` using a realistically large reference document (clears the per-model minimum), printing actual `cache_creation_input_tokens` / `cache_read_input_tokens` from two consecutive calls. |
+| `examples/cache_savings_demo_openai.py` | The same live-measurement pattern against `api.openai.com`, using `providers/openai.py`'s automatic-caching request shape and per-model discount table. |
+| `examples/cache_savings_demo_gemini.py` | The same pattern against the real Gemini API, testing the *implicit* (automatic, best-effort) caching path via `providers/gemini.py`. |
+| `examples/cache_savings_demo_gemini_explicit.py` | Gemini's *explicit* `CachedContent` path — deterministic, not best-effort. Creates a cache resource, then references it across several calls. Exists because live testing found implicit caching missed 18/18 real calls while explicit hit 3/3 (later 4/4) the moment billing was enabled; see `providers/gemini.py`'s docstring and `ROADMAP.md` for the full numbers. |
+| `examples/cache_savings_demo_generic.py` | A runnable **template** for testing prompt caching against any provider tonst has no dedicated script for — works out of the box in a mocked dry-run mode; three clearly marked edits point it at a real provider and a real key. |

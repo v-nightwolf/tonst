@@ -131,7 +131,7 @@ class LocalCompressor:
                     "prompt": prompt,
                     "stream": False,
                     # temperature=0: makes compression deterministic. Verified via
-                    # diagnose_local_llm_perf.py (2026-09-13) to cost nothing in
+                    # scripts/research/diagnose_local_llm_perf.py (2026-09-13) to cost nothing in
                     # latency (746ms vs 714ms avg, within noise) while turning
                     # VARIED outputs into IDENTICAL ones across repeated calls on
                     # the same input -- pure upside for guard-rail predictability

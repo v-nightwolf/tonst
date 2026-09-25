@@ -361,7 +361,7 @@ class CacheUsageReport:
         2x for 1-hour) to populate the cache. The saving only shows up
         on a later cache-READ call against that same prefix. Report
         both calls, not just the read, if you want an honest before/
-        after picture -- see cache_savings_demo_anthropic.py (or the OpenAI/Gemini/generic siblings).
+        after picture -- see examples/cache_savings_demo_anthropic.py (or the OpenAI/Gemini/generic siblings).
 
         Uses tonst's own CACHE_READ/WRITE multiplier constants above
         (verified against Anthropic's published pricing docs, not this

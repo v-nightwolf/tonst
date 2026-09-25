@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-stress_test_live_guardrails.py
+scripts/research/stress_test_live_guardrails.py
 --------------------------------
-Targeted follow-up to capture_restoration_failures.py, which came back
+Targeted follow-up to scripts/research/capture_restoration_failures.py, which came back
 with ZERO failures across 240 isolated compression/compaction
 iterations for qwen2.5:1.5b and gemma2:2b. That result is inconclusive,
 not clean: those isolated runs had --use-enhanced-redaction OFF, so the
@@ -48,10 +48,15 @@ failing).
 
 Usage:
     pip install psutil   # once, if not already installed
-    python3 stress_test_live_guardrails.py --model gemma2:2b --reps 20
-    python3 stress_test_live_guardrails.py --model qwen2.5:1.5b --reps 20
+    python3 scripts/research/stress_test_live_guardrails.py --model gemma2:2b --reps 20
+    python3 scripts/research/stress_test_live_guardrails.py --model qwen2.5:1.5b --reps 20
 """
 from __future__ import annotations
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import argparse
 import hashlib
 import json

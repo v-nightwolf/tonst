@@ -8,4 +8,4 @@ python3 -m pip install -r requirements.txt
 
 echo ""
 echo "Running demo..."
-python3 demo.py
+python3 examples/demo.py

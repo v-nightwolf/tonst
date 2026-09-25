@@ -33,3 +33,7 @@ _scratch_to_delete/
 
 # Stray local snapshot folder, not part of the project
 Claude outputs/
+
+# Local benchmark/test outputs (results behind the published numbers; kept locally, not committed)
+results_archive/
+*.jsonl

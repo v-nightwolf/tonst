@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-test_codename_threshold_sweep.py
+scripts/research/test_codename_threshold_sweep.py
 -----------------------------------
-test_codename_label_wording.py ruled out label rewording as a cheap fix
+scripts/research/test_codename_label_wording.py ruled out label rewording as a cheap fix
 for supervised-shape codename recall: every generic alternative to the
 current "project codename" label tied or lost to baseline, one collapsing
 to 0% across every industry. This tests the other obvious lever: the
@@ -21,8 +21,13 @@ without much recall gain is probably tagging noise, not more PII.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 test_codename_threshold_sweep.py
+    python3 scripts/research/test_codename_threshold_sweep.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 

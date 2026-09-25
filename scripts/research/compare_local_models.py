@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-compare_local_models.py
+scripts/research/compare_local_models.py
 ------------------------
 Compares candidate Ollama models against the current default
 (llama3.2:1b) for tonst's LOCAL-MODEL tasks (enhanced redaction,
 compression, history compaction) all at once -- reuses
-benchmark_tonst.py's run_benchmark() directly (same synthetic
+benchmarks/benchmark_tonst.py's run_benchmark() directly (same synthetic
 industries, same guard rails, same near-timeout/round-trip-failure
 metrics) so results are directly comparable to every number already in
 research/colab-benchmark-findings.md, not a separate ad-hoc test.
@@ -33,11 +33,11 @@ which is useful as a first pass, but the guard-rail metrics below
 distinguish which of the three stages is responsible for a given
 failure -- rerun a promising candidate with the isolated
 --use-enhanced-redaction / --use-local-compression /
---use-history-compaction flags (already supported by benchmark_tonst.py)
+--use-history-compaction flags (already supported by benchmarks/benchmark_tonst.py)
 if you need to know that.
 
 Also note: this does NOT measure full_name/company/codename recall the
-way gliner_sanity_check.py does for GLiNER -- benchmark_tonst.py's own
+way scripts/research/gliner_sanity_check.py does for GLiNER -- benchmarks/benchmark_tonst.py's own
 leak-check only covers email/card/phone/ip. Redaction quality here is
 being observed only as a side effect (does redact_llm's guard rail
 accept its output, i.e. does the model return parseable, uncorrupted
@@ -46,10 +46,10 @@ backend decision is GLiNER's per research/gliner-sanity-check-findings.md,
 independent of whatever wins here for compression/compaction.
 
 Usage:
-    python3 compare_local_models.py --iterations 60 --workers 1
-    python3 compare_local_models.py --models llama3.2:1b,qwen2.5:1.5b --iterations 30
+    python3 scripts/research/compare_local_models.py --iterations 60 --workers 1
+    python3 scripts/research/compare_local_models.py --models llama3.2:1b,qwen2.5:1.5b --iterations 30
 
-Must be run from the same directory as benchmark_tonst.py (imports it
+Must be run from the same directory as benchmarks/benchmark_tonst.py (imports it
 directly). Requires `ollama` on PATH and the Ollama server already
 running (`ollama serve`) -- this script will `ollama pull` each model
 that isn't already present, which needs real internet access (works
@@ -59,6 +59,11 @@ registries -- see research/gliner-sanity-check-findings.md's Setup
 section for that same block encountered with pip/PyPI).
 """
 from __future__ import annotations
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import argparse
 import json
 import subprocess

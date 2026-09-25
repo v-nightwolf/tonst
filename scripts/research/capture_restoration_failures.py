@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-capture_restoration_failures.py
+scripts/research/capture_restoration_failures.py
 --------------------------------
 Isolates ONE local-model stage (compression OR compaction) for ONE
-model, and -- unlike benchmark_tonst.py's aggregate near_timeout /
+model, and -- unlike benchmarks/benchmark_tonst.py's aggregate near_timeout /
 round_trip_restoration_failures COUNTS -- captures the full transcript
 of every failing case: which industry/shape, the original text, the
 exact prompt sent to the "paid" API, and the raw final response. That's
 enough to see exactly what the rewrite did to corrupt a placeholder,
 not just that a failure happened.
 
-Why this exists: compare_local_models.py's combined run (redaction +
+Why this exists: scripts/research/compare_local_models.py's combined run (redaction +
 compression + compaction together) found qwen2.5:1.5b and gemma2:2b
 each producing 1 round_trip_restoration_failure out of 60 iterations
 (see research/compression-model-replacement-plan.md), despite the
@@ -26,7 +26,7 @@ corruption found is unambiguous about which stage caused it.
 
 Compaction-only efficiency note: compact_history() only ever fires for
 the unsupervised_multi_turn prompt shape (the only one that goes
-through query_messages() -- see benchmark_tonst.py's
+through query_messages() -- see benchmarks/benchmark_tonst.py's
 generate_benchmark_case). Cycling through all shapes like the main
 benchmark does would waste most iterations on cases that can't
 exercise compaction at all, so --stage compaction forces every
@@ -41,15 +41,20 @@ the exact same failure as the earlier combined run. Run with enough
 iterations to catch a fresh example if the original doesn't recur.
 
 Usage:
-    python3 capture_restoration_failures.py --model gemma2:2b --stage compression --iterations 60
-    python3 capture_restoration_failures.py --model gemma2:2b --stage compaction --iterations 60
-    python3 capture_restoration_failures.py --model qwen2.5:1.5b --stage compression --iterations 60
-    python3 capture_restoration_failures.py --model qwen2.5:1.5b --stage compaction --iterations 60
+    python3 scripts/research/capture_restoration_failures.py --model gemma2:2b --stage compression --iterations 60
+    python3 scripts/research/capture_restoration_failures.py --model gemma2:2b --stage compaction --iterations 60
+    python3 scripts/research/capture_restoration_failures.py --model qwen2.5:1.5b --stage compression --iterations 60
+    python3 scripts/research/capture_restoration_failures.py --model qwen2.5:1.5b --stage compaction --iterations 60
 
-Must be run from the same directory as benchmark_tonst.py (imports it
+Must be run from the same directory as benchmarks/benchmark_tonst.py (imports it
 directly).
 """
 from __future__ import annotations
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import argparse
 import json
 import random

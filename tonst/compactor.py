@@ -279,7 +279,7 @@ def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[st
                 "stream": False,
                 # temperature=0: same rationale as local_model.py's compress() --
                 # deterministic summaries, no measured latency cost (see
-                # diagnose_local_llm_perf.py, 2026-09-13).
+                # scripts/research/diagnose_local_llm_perf.py, 2026-09-13).
                 # num_predict: defensive cap, same reasoning as the fix applied
                 # to local_model.py's compress() on 2026-09-13 (that call had
                 # NO cap at all and 51/360 iterations landed within 250ms of

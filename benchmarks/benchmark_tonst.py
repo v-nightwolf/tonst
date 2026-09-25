@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+# Run from anywhere: make the repo root (and this folder) importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import argparse, concurrent.futures, json, math, random, statistics, subprocess, sys, threading, time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -304,7 +308,7 @@ class SliceMetrics:
     # compression_ms / compaction_ms are already computed by the library
     # (see client.py's OptimizationReport) -- this just flags any stage
     # whose elapsed time landed within NEAR_TIMEOUT_MS of the 8.0s ceiling,
-    # which is the same signature _diagnose_local_model_latency.py uses to
+    # which is the same signature scripts/research/_diagnose_local_model_latency.py uses to
     # tell "genuinely slow" apart from "never got serviced at all". Without
     # this, aggregate local_overhead_ms alone can't distinguish a run where
     # every call is contention-limited from one where every call is just

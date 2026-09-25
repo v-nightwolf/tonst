@@ -1,5 +1,5 @@
 """
-cache_savings_demo_anthropic.py
+examples/cache_savings_demo_anthropic.py
 ---------------------------------
 Measures REAL prompt-caching savings against the actual api.anthropic.com
 endpoint -- not a mock, not an estimate. This exists because tonst's own
@@ -15,9 +15,9 @@ API to call: every provider needs its own base URL, auth header, and
 request/response shape. This file is the Anthropic one specifically.
 See the sibling scripts for the others, and for how to test a provider
 tonst has no dedicated module for:
-    - cache_savings_demo_openai.py    -- OpenAI, api.openai.com
-    - cache_savings_demo_gemini.py    -- Google Gemini, generativelanguage.googleapis.com
-    - cache_savings_demo_generic.py   -- template for ANY OTHER provider,
+    - examples/cache_savings_demo_openai.py    -- OpenAI, api.openai.com
+    - examples/cache_savings_demo_gemini.py    -- Google Gemini, generativelanguage.googleapis.com
+    - examples/cache_savings_demo_generic.py   -- template for ANY OTHER provider,
       using tonst.providers.generic.GenericCacheConfig; runs out of the
       box in a mocked dry-run mode, with clear instructions for pointing
       it at a real provider and a real key.
@@ -31,7 +31,7 @@ This script also exists to sidestep a real gotcha: Anthropic requires a
 MINIMUM stable-prefix length before it will cache anything at all
 (1,024 tokens for claude-sonnet-4-6, the model used here) -- below that,
 requests are processed normally with no error and no cache_creation/
-cache_read tokens. tonst's own demo.py uses a tiny stable block on
+cache_read tokens. tonst's own examples/demo.py uses a tiny stable block on
 purpose (to keep the demo short) which means it would NOT actually get
 cached if pointed at the real API. This script instead uses a
 deliberately large, realistic reference document so the cache has a
@@ -41,16 +41,19 @@ before spending any API calls.
 Setup (this script needs an ANTHROPIC key specifically -- see the
 sibling scripts above for other providers):
     1. Get an API key from https://console.anthropic.com
-    2. Put it in a .env file in this directory (gitignored):
+    2. Put it in a .env file in the repository root (gitignored):
            ANTHROPIC_API_KEY=sk-ant-...
        or export it directly in your shell.
-    3. python3 cache_savings_demo_anthropic.py
+    3. python3 examples/cache_savings_demo_anthropic.py
 
 What you should see: call 1 shows cache_creation_input_tokens > 0 (a new
 cache entry was written) and cache_read_input_tokens == 0. Call 2, sent
 seconds later with the IDENTICAL stable prefix, should show
 cache_read_input_tokens > 0 -- that's the actual, measured discount.
 """
+# Run from anywhere: make the repo root importable without `pip install -e .`.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import json
 import os
@@ -79,7 +82,7 @@ def _load_dotenv_if_present():
     live in a gitignored file instead of being typed into a shell (and
     therefore into shell history) every time.
     """
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path) as f:
@@ -108,7 +111,7 @@ MODEL = "claude-sonnet-4-6"  # 1,024-token cache minimum -- see CACHE_MINIMUM_TO
 
 # Deliberately long and repetitive-but-realistic: a support-org reference
 # doc, well past the 1,024-token minimum for MODEL above (~1,440 tokens
-# by tonst's chars/4 estimate -- see cache_savings_demo_gemini.py's
+# by tonst's chars/4 estimate -- see examples/cache_savings_demo_gemini.py's
 # REFERENCE_DOC comment for why that estimate runs a bit hot vs. the
 # real tokenizer; either way this clears the minimum with real margin).
 #

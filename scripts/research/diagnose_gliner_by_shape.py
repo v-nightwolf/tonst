@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-diagnose_gliner_by_shape.py
+scripts/research/diagnose_gliner_by_shape.py
 -----------------------------
 Confirms (or refutes) a specific hypothesis about the ~18-20pp gap
 between the standalone GLiNER sanity check (~91% weighted recall on
-clean text) and the real in-pipeline benchmark_tonst.py numbers
-(70.0% at 60 iterations, 72.78% at 180). diagnose_gliner_regex_interaction.py
+clean text) and the real in-pipeline benchmarks/benchmark_tonst.py numbers
+(70.0% at 60 iterations, 72.78% at 180). scripts/research/diagnose_gliner_regex_interaction.py
 already ruled out "regex running first disrupts GLiNER's context"
 as the main cause (only a -2.59pp effect, mostly on codename) -- so
 this checks the other real candidate: run_benchmark()'s
@@ -26,8 +26,13 @@ visible instead of inferred from arithmetic.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 diagnose_gliner_by_shape.py
+    python3 scripts/research/diagnose_gliner_by_shape.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 

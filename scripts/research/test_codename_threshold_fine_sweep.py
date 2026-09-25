@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-test_codename_threshold_fine_sweep.py
+scripts/research/test_codename_threshold_fine_sweep.py
 ----------------------------------------
-test_codename_threshold_sweep.py / test_codename_threshold_precision.py
+scripts/research/test_codename_threshold_sweep.py / scripts/research/test_codename_threshold_precision.py
 tested a coarse grid (0.5 down to 0.05) and found: recall rises sharply
 as threshold drops, but precision falls off a cliff starting around
 0.15, and worse, some of that precision loss was a REAL correctness bug
@@ -23,8 +23,13 @@ jumping straight from 0.30 to 0.15 to 0.05 again.
 
 Usage:
     cd ~/Desktop/tonst
-    python3 test_codename_threshold_fine_sweep.py
+    python3 scripts/research/test_codename_threshold_fine_sweep.py
 """
+# Run from anywhere: make the repo root and benchmarks/ importable without `pip install -e .`.
+import os as _os, sys as _sys
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_sys.path.insert(0, _ROOT)
+_sys.path.insert(0, _os.path.join(_ROOT, "benchmarks"))
 import random
 import sys
 
