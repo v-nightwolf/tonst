@@ -10,12 +10,17 @@ personal data back.
 It runs in your own process. There is no proxy, server or account, and
 nothing is sent anywhere except the request you were already making.
 
-```
-your app ──► tonst (in-process) ─────────────────────► your LLM API
-             1. redact PII (placeholders)                (sees only the
-             2. trim / compact / filter what's sent       redacted, smaller
-             3. shape the request for prompt caching      request)
-your app ◄── 4. restore PII in the response ◄──────────────────┘
+```mermaid
+sequenceDiagram
+    participant App as Your app
+    participant T as tonst (runs in your process)
+    participant API as Your LLM API
+    App->>T: prompt or messages (with PII)
+    Note over T: 1. Redact PII into placeholders<br/>2. Trim, compact history, filter tools and chunks<br/>3. Order the request for prompt caching
+    T->>API: redacted, smaller request
+    API-->>T: response (placeholders only)
+    Note over T: 4. Put the real values back
+    T-->>App: response + savings report
 ```
 
 **What it does**
