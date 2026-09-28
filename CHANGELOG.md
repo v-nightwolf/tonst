@@ -5,6 +5,11 @@
 Redaction overhaul, measured with a new answer-quality benchmark
 (`experiments/privacy_quality/`). All savings features are unchanged.
 
+Release benchmark (100 main prompts, default settings + GLiNER): answer quality
+−0.08 (Claude Sonnet 4.6) and −0.38 (Gemini 3.8 Flash) on a 1–10 judge vs.
+unredacted; 100% of must-have values kept; no names, emails, phones, addresses
+or secrets reached either provider.
+
 ### Added
 - **Answer-quality benchmark**: 120 realistic prompts sent as-is and redacted to
   Claude and Gemini, graded blind; reports leaks, restoration failures,

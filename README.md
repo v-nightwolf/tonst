@@ -37,7 +37,7 @@ sequenceDiagram
 
 It works with Anthropic, OpenAI and Gemini, and with any other provider
 through a function you supply. Measured results are summarized
-[below](#results) and detailed in [docs/results.md](docs/results.md).
+[below](#results) and detailed in [docs/results.md](https://github.com/v-nightwolf/tonst/blob/main/docs/results.md).
 
 ---
 
@@ -289,7 +289,7 @@ relevance, and when a request shares fewer than two words with every tool
 it sends all of them instead of guessing. For catalogs of hundreds of
 tools on Anthropic, `build_anthropic_deferred_tools(ALL_TOOLS)` hands the
 choice to Anthropic's tool search instead. See
-[docs/tools-and-rag.md](docs/tools-and-rag.md).
+[docs/tools-and-rag.md](https://github.com/v-nightwolf/tonst/blob/main/docs/tools-and-rag.md).
 
 #### RAG pipeline
 
@@ -329,7 +329,7 @@ Anthropic's explicit `cache_control` markers, either use `messages_fn`
 with `to_anthropic()`, or build the request yourself with
 `redact_and_trim_parts()` + `build_anthropic_cache_request()`. Provider
 details, minimum cacheable lengths and the generic config for other
-providers are in [docs/caching-and-providers.md](docs/caching-and-providers.md).
+providers are in [docs/caching-and-providers.md](https://github.com/v-nightwolf/tonst/blob/main/docs/caching-and-providers.md).
 
 ### 4. Production checklist
 
@@ -343,7 +343,7 @@ providers are in [docs/caching-and-providers.md](docs/caching-and-providers.md).
   never prompt text, values or placeholder hashes.
 - `regex` catches structured PII only. If your prompts contain names or
   free-text personal details, use `redaction_backend="gliner"`, and test
-  recall on your own data first ([docs/redaction.md](docs/redaction.md)).
+  recall on your own data first ([docs/redaction.md](https://github.com/v-nightwolf/tonst/blob/main/docs/redaction.md)).
 
 **Latency**
 
@@ -391,7 +391,7 @@ tonst stats --json             # for dashboards
 Set `TONST_SAVINGS_LOG` to put the log somewhere else, and
 `input_price_per_million=` on the client to see estimated dollars. Token
 counts are chars/4 estimates unless you pass `token_counter=` (see
-[docs/measurement.md](docs/measurement.md)); `messages_fn` usage adds
+[docs/measurement.md](https://github.com/v-nightwolf/tonst/blob/main/docs/measurement.md)); `messages_fn` usage adds
 the provider's real prompt and cached-token counts to each entry.
 
 ---
@@ -441,7 +441,7 @@ the `*_ms` timings.
 ## Results
 
 Headline numbers. Each one says how it was measured; the full tables,
-methods and every intermediate run are in [docs/results.md](docs/results.md).
+methods and every intermediate run are in [docs/results.md](https://github.com/v-nightwolf/tonst/blob/main/docs/results.md).
 
 | What | Result | How it was measured |
 |---|---|---|
@@ -451,8 +451,8 @@ methods and every intermediate run are in [docs/results.md](docs/results.md).
 | Cache-aware compaction, short chats | Avoids a +14.9% loss that summarizing too early caused in a 12-turn Claude chat | Live API |
 | Prompt caching, Gemini 3.1 Flash-Lite, 6 domains | Net cost −53% across 24 calls | Live API |
 | Redaction + trim + compression, 360 prompts in 6 domains | Tokens −21.1%; 100% structured-PII recall with 0 leaks; 87.8% free-text PII recall with GLiNER | Local pipeline (API mocked) |
-| Mechanical trim on long, redundant inputs (privacy benchmark's heavy cases) | Input tokens −39% to −49% on re-quoted email threads, −40% to −48% on padded meeting transcripts; no saving on log dumps or small RAG sets | Live API |
-| Answer quality with redaction on, 100 work prompts | −0.46 (Claude Sonnet 4.6) and −0.42 (Gemini 3.8 Flash) on a 1–10 judge vs. unredacted; 100% of must-have values kept (preliminary) | Live API, blind LLM judge |
+| Mechanical trim on long, redundant inputs (privacy benchmark's heavy cases) | Input tokens −33% to −51% on re-quoted email threads and −34% to −51% on padded meeting transcripts, with redaction on; roughly break-even on log dumps and small RAG sets | Live API |
+| Answer quality with redaction on, 100 work prompts | −0.08 (Claude Sonnet 4.6) and −0.38 (Gemini 3.8 Flash) on a 1–10 judge vs. unredacted; 100% of must-have values kept; 0 names, emails, phones, addresses or secrets reached the provider | Live API, blind LLM judge |
 | Compaction on long chats with caching | −18% at 40 turns, −55% at 100 turns | Simulation, calibrated to the live runs |
 
 Savings depend on your traffic. A short, clean prompt gets 0% from
@@ -468,23 +468,26 @@ published benchmark, and hides more than the obvious fields.
 ### Does hiding the data make answers worse?
 
 A little, and we measured how much. The benchmark in
-[`experiments/privacy_quality/`](experiments/privacy_quality/) sends 120
+[`experiments/privacy_quality/`](https://github.com/v-nightwolf/tonst/tree/main/experiments/privacy_quality/) sends 120
 realistic work prompts — support replies, contracts, HR notes, invoices,
 config files with keys, meeting notes, small tables, translations, long
 email threads, and 10 hold-out prompts written after the detectors were
 tuned — to Claude Sonnet 4.6 and Gemini 3.8 Flash, once as-is and once
 through tonst. A separate model grades each pair blind, in random
-order. All people, companies and keys in the prompts are invented.
-
-> **Preliminary numbers.** These come from development runs on
-> 2026-09-28. A single final run on the release code will replace them
-> before publishing (`python experiments/privacy_quality/run.py`).
+order (judge: Gemini 3.8 Flash). All people, companies and keys in the
+prompts are invented. Results from the release run of tonst 0.2.0
+(2026-09-28), default settings plus GLiNER:
 
 | | Claude Sonnet 4.6 | Gemini 3.8 Flash |
 |---|---|---|
-| Answer quality, masked vs. as-is (1–10 judge, 100 main prompts) | −0.46 | −0.42 |
-| Answers containing every must-have value (names, totals, IDs) | 100% | 100% |
+| Answer quality, masked vs. as-is (1–10 judge, 100 main prompts) | −0.08 (9.2 → 9.1) | −0.38 (9.7 → 9.3) |
+| Same, with `placeholder_style="readable"` | −0.47 | −0.31 |
+| Hold-out prompts (10, written after tuning) | +0.3 | −0.4 |
+| Answers containing every must-have value (names, totals, IDs) | 100% | 100% (94% on hold-outs) |
 | Placeholders left in answers | 0 | 0 |
+
+The full tables, per-category results and how to rerun it are in
+[`experiments/privacy_quality/`](https://github.com/v-nightwolf/tonst/tree/main/experiments/privacy_quality/#results-tonst-020-2026-09-28).
 
 Most of the remaining gap has a known cause: the model can't write a name
 it never saw in another script (e.g. Hindi), can't tell someone's gender
@@ -507,8 +510,8 @@ is off by default.
 
 In the benchmark (default settings plus GLiNER), no names, emails,
 addresses, secrets, codenames or IP addresses reached either provider;
-one company mention ("the Brightwell Health clinic") and one phone format
-(since fixed) did. Detection is never perfect: test on your own data
+the only miss was one company mentioned as "the Brightwell Health clinic",
+in 2 of 480 masked prompts. Detection is never perfect: test on your own data
 before relying on it. Public services such as `api.anthropic.com` are
 deliberately left visible — hiding them from the provider protects nothing.
 
@@ -576,15 +579,15 @@ deliberately left visible — hiding them from the provider protects nothing.
 
 | Document | Contents |
 |---|---|
-| [docs/results.md](docs/results.md) | Every benchmark and live run, with methods |
-| [experiments/privacy_quality/](experiments/privacy_quality/) | The answer-quality benchmark for redaction: cases, runner, how to reproduce |
-| [docs/redaction.md](docs/redaction.md) | Detectors, backends, placeholders, names, emails, secrets, streaming |
-| [docs/compaction.md](docs/compaction.md) | Stateless and rolling compaction, summaries, cache-aware mode, background summaries |
-| [docs/tools-and-rag.md](docs/tools-and-rag.md) | Tool/MCP definition filtering, deferred loading, RAG chunk optimization |
-| [docs/caching-and-providers.md](docs/caching-and-providers.md) | Prompt-caching structuring, per-provider details, other providers, live cache tests |
-| [docs/measurement.md](docs/measurement.md) | Exact token counting and the savings log |
-| [docs/testing.md](docs/testing.md) | Unit tests, demos, benchmarks, live tests, repository layout |
-| [ROADMAP.md](ROADMAP.md) | Decisions, open questions and the full history of results |
+| [docs/results.md](https://github.com/v-nightwolf/tonst/blob/main/docs/results.md) | Every benchmark and live run, with methods |
+| [experiments/privacy_quality/](https://github.com/v-nightwolf/tonst/tree/main/experiments/privacy_quality/) | The answer-quality benchmark for redaction: cases, runner, how to reproduce |
+| [docs/redaction.md](https://github.com/v-nightwolf/tonst/blob/main/docs/redaction.md) | Detectors, backends, placeholders, names, emails, secrets, streaming |
+| [docs/compaction.md](https://github.com/v-nightwolf/tonst/blob/main/docs/compaction.md) | Stateless and rolling compaction, summaries, cache-aware mode, background summaries |
+| [docs/tools-and-rag.md](https://github.com/v-nightwolf/tonst/blob/main/docs/tools-and-rag.md) | Tool/MCP definition filtering, deferred loading, RAG chunk optimization |
+| [docs/caching-and-providers.md](https://github.com/v-nightwolf/tonst/blob/main/docs/caching-and-providers.md) | Prompt-caching structuring, per-provider details, other providers, live cache tests |
+| [docs/measurement.md](https://github.com/v-nightwolf/tonst/blob/main/docs/measurement.md) | Exact token counting and the savings log |
+| [docs/testing.md](https://github.com/v-nightwolf/tonst/blob/main/docs/testing.md) | Unit tests, demos, benchmarks, live tests, repository layout |
+| [ROADMAP.md](https://github.com/v-nightwolf/tonst/blob/main/ROADMAP.md) | Decisions, open questions and the full history of results |
 
 Some documents cite research notes under `research/`; those notes aren't
 published in this repository.
@@ -607,6 +610,6 @@ API keys go in a `.env` file in the repository root (gitignored).
 ## Whitepaper, license and contributing
 
 - **Whitepaper:** [Beyond the Prompt](https://claude.ai/artifact/2hcKTcfwBzAWev1PUGRv2x) · DOI [10.5281/zenodo.22745266](https://doi.org/10.5281/zenodo.22745266)
-- **License:** MIT (see [LICENSE](LICENSE)).
-- **Tests:** `pip install -r requirements-dev.txt && pytest` (315 tests, run on every push for Python 3.10–3.13). Live API tests and benchmarks are described in [docs/testing.md](docs/testing.md).
+- **License:** MIT (see [LICENSE](https://github.com/v-nightwolf/tonst/blob/main/LICENSE)).
+- **Tests:** `pip install -r requirements-dev.txt && pytest` (315 tests, run on every push for Python 3.10–3.13). Live API tests and benchmarks are described in [docs/testing.md](https://github.com/v-nightwolf/tonst/blob/main/docs/testing.md).
 - Issues and pull requests are welcome.
