@@ -19,7 +19,7 @@ Redaction overhaul, measured with a new answer-quality benchmark
 - **Note to the model** (`placeholder_hint=True`): explains the placeholders,
   who owns which contact details, and that secrets are exposed credentials.
   Sent only when something was hidden, with only the lines that apply:
-  ~45 tokens, up to ~115 with names, contacts and secrets. In chats the fixed
+  ~45 tokens, up to ~120 with names, contacts and secrets. In chats the fixed
   part goes in the system message (cacheable) and the contact line rides on
   the latest user message.
 - **New detectors**: API keys and other secrets (always on), postal addresses,

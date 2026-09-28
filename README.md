@@ -530,7 +530,7 @@ deliberately left visible — hiding them from the provider protects nothing.
   hidden) says the tokens stand for real values. Extra lines are added only
   when they apply: first/last-name parts when a person was hidden, whose
   contact details are whose, and that `[[SECRET_…]]` tokens are exposed
-  credentials. About 45 tokens, up to ~115 with every line; in chats the
+  credentials. About 45 tokens, up to ~120 with every line; in chats the
   fixed part sits in the system message, where prompt caching makes repeat
   reads ~90% cheaper. Without the note, Claude treated placeholders as
   template blanks in ~40% of answers.
@@ -556,7 +556,7 @@ deliberately left visible — hiding them from the provider protects nothing.
   amounts (which is why hiding money is opt-in); see
   [the benchmark](#does-hiding-the-data-make-answers-worse).
 - **Privacy costs a few tokens.** When something was hidden, the note to the
-  model (~45–115 tokens) and the longer stable placeholders add input tokens. On short prompts
+  model (~45–120 tokens) and the longer stable placeholders add input tokens. On short prompts
   that can outweigh trimming; `placeholder_hint=False` turns the note off
   (not recommended for Claude).
 - **The mapping lives in memory.** Keep the request's result until the

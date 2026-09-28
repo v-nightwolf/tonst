@@ -220,9 +220,9 @@ def hint_parts(text: str) -> tuple:
     parts = [f"{' and '.join(cs)} {'is' if len(cs) == 1 else 'are'} {person}'s own" for person, cs in by_person.items()]
     # Worded as ownership, not just association: with "belongs to", Claude
     # still offered a customer's own email and phone as the support contact
-    # (2026-09-27, 12-case run). "including the sender's": in the 2026-09-28
-    # run Claude signed a sales email with the recipient's name and email.
-    return fixed, "Contact details: " + "; ".join(parts) + " -- never present them as anyone else's, including the sender's."
+    # (2026-09-27, 12-case run). Adding "including the sender's" (2026-09-28)
+    # made Claude write meta-notes about the rule into its answers -- reverted.
+    return fixed, "Contact details: " + "; ".join(parts) + " -- never present them as anyone else's."
 
 
 def build_hint(text: str) -> str:
