@@ -32,10 +32,15 @@ from .rag import optimize_chunks, ChunkSelection
 from .token_count import AnthropicTokenCounter, GeminiTokenCounter
 from .summarizers import AnthropicSummarizer, GeminiSummarizer
 from .savings_log import SavingsLog, summarize as summarize_savings, SavingsSummary
+from .placeholders import PlaceholderFactory
+from .redact import StreamRestorer, restore_placeholders
 from . import providers
 from . import adapters
 
 __all__ = [
+    "PlaceholderFactory",
+    "restore_placeholders",
+    "StreamRestorer",
     "TonstClient",
     "OptimizationReport",
     "StructuredRedactionResult",

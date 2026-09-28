@@ -12,6 +12,8 @@ end to end.
 """
 
 import pytest
+
+from tonst.placeholders import PLACEHOLDER_HINT
 from tonst.redact import redact, redact_with_llm
 from tonst.redact_llm import LLMRedactor
 from tonst.trim import (
@@ -71,8 +73,10 @@ def test_regex_redact_placeholder_is_deterministic_across_calls():
 def test_regex_redact_different_values_get_different_placeholders():
     text = "Emails: jane.doe@example.com and john.smith@example.com"
     result = redact(text)
-    assert len(result.mapping) == 2
-    assert len(set(result.mapping.keys())) == 2
+    emails = [p for p in result.mapping if p.startswith("[[EMAIL_")]
+    assert len(emails) == 2 and len(set(emails)) == 2
+    # same domain -> one shared [[DOMAIN_...]] placeholder (email_style="split")
+    assert len([p for p in result.mapping if p.startswith("[[DOMAIN_")]) == 1
 
 
 # ---------------------------------------------------------------------
@@ -555,7 +559,7 @@ def test_client_redact_and_trim_parts_preserves_structure_and_restores():
 
     assert "ops@example.com" not in result.parts.stable_blocks[0]
     assert "test@example.com" not in result.parts.variable
-    assert len(result.mapping) == 2
+    assert len([p for p in result.mapping if p.startswith("[[EMAIL_")]) == 2
     # Restoring a response that happens to echo a placeholder should
     # bring back the real value.
     placeholder = next(iter(result.mapping))
@@ -1326,14 +1330,17 @@ def test_query_rag_end_to_end_redacts_and_reports_chunks():
 
     def fake_call(prompt):
         sent["prompt"] = prompt
-        return "Email [[EMAIL_" + prompt.split("[[EMAIL_")[1].split("]]")[0] + "]] for help."
+        body = prompt.replace(PLACEHOLDER_HINT, "")
+        return "Email [[EMAIL_" + body.split("[[EMAIL_")[1].split("]]")[0] + "]] for help."
 
     chunks = _CHUNKS + ["For refund problems, email support@acme.com and quote your order number."]
-    client = TonstClient(call_fn=fake_call)
+    # hint off: this test is about chunk savings, and the note would mask them at this tiny size
+    client = TonstClient(call_fn=fake_call, placeholder_hint=False)
     response, report = client.query_rag("how do I get a refund?", chunks, system="You are a support bot.")
     assert "support@acme.com" not in sent["prompt"]
     assert "support@acme.com" in response  # restored
-    assert sent["prompt"].startswith("You are a support bot.")
+    # (placeholder_hint is on by default, so the note comes first)
+    assert sent["prompt"].replace(PLACEHOLDER_HINT, "").startswith("You are a support bot.")
     assert sent["prompt"].rstrip().endswith("Question: how do I get a refund?")
     assert report.chunks_in == 6 and report.chunks_sent == 4
     assert report.redacted_types == {"EMAIL": 1}

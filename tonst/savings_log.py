@@ -50,6 +50,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
+from .placeholders import PLACEHOLDER_LABEL_RE
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOG_PATH = os.path.join(os.path.expanduser("~"), ".tonst", "savings.jsonl")
@@ -68,8 +70,13 @@ def redacted_types_from_mapping(mapping: dict) -> dict:
     """
     counts: Counter = Counter()
     for placeholder in mapping or {}:
-        m = _PLACEHOLDER_RE.match(str(placeholder))
-        counts[m.group(1) if m else "OTHER"] += 1
+        m = PLACEHOLDER_LABEL_RE.match(str(placeholder))
+        if m and (m.group(2) or m.group(1) == "DOMAIN"):
+            # Parts of something already counted: a person's first/last
+            # name (names.py) or an email's domain (split emails).
+            continue
+        label = m.group(1) if m else "OTHER"
+        counts["SECRET" if label.startswith("SECRET") else label] += 1
     return dict(sorted(counts.items()))
 
 

@@ -37,3 +37,6 @@ Claude outputs/
 # Local benchmark/test outputs (results behind the published numbers; kept locally, not committed)
 results_archive/
 *.jsonl
+
+# Answer-quality benchmark outputs
+experiments/privacy_quality/results/

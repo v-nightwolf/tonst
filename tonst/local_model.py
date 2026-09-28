@@ -25,6 +25,8 @@ import requests
 
 from .ollama_util import fits_context, num_ctx_for
 
+from .placeholders import PLACEHOLDER_LOOSE_RE, PLACEHOLDER_STRICT_RE
+
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 # Diagnostic only -- never affects behavior. See redact_llm.py's matching
@@ -42,7 +44,7 @@ _SESSION = requests.Session()
 COMPRESSION_INSTRUCTION = (
     "Rewrite the following text to be as short as possible while preserving "
     "every fact, instruction, and constraint. Do not add commentary. "
-    "The text may contain tokens shaped like [[LABEL_xxxxxxxx]] -- these are "
+    "The text may contain tokens shaped like [[LABEL_xxxxxxxx]] or [[LABEL_1]] -- these are "
     "redaction placeholders standing in for real PII. Copy every one of them "
     "verbatim, exactly as written, character for character. Never alter, "
     "recase, or invent one. "
@@ -52,14 +54,14 @@ COMPRESSION_INSTRUCTION = (
 # Well-formed placeholder as produced by redact.py/redact_llm.py (and any
 # extraction-based redaction backend using the same [[LABEL_hexdigest]]
 # shape): used to find the REAL placeholders in trusted source text.
-_PLACEHOLDER_STRICT_RE = re.compile(r"\[\[[A-Z]+_[0-9a-f]{8}\]\]")
+_PLACEHOLDER_STRICT_RE = PLACEHOLDER_STRICT_RE
 # Deliberately permissive: used to scan UNTRUSTED model output. A
 # corruption (e.g. a re-cased hex digest) no longer matches the strict
 # pattern above -- scanning output with the strict pattern would let a
 # corrupted span sail through un-flagged because it no longer "looks
 # like" a placeholder to the strict regex. Any double-bracket span,
 # well-formed or not, is a candidate that must exactly match a real one.
-_PLACEHOLDER_LOOSE_RE = re.compile(r"\[\[.*?\]\]")
+_PLACEHOLDER_LOOSE_RE = PLACEHOLDER_LOOSE_RE
 
 
 def placeholders_preserved(original: str, rewritten: str) -> bool:

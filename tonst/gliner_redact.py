@@ -33,11 +33,53 @@ module, and _load()'s lazy import of `gliner` itself below.
 """
 
 from __future__ import annotations
-import hashlib
+import logging
 import re
 import threading
 from dataclasses import dataclass, field
 from typing import Optional
+
+from .names import apply_known_entities, apply_names, context_name_spans, not_worth_hiding, remember_entity
+from .placeholders import PlaceholderFactory, make_placeholder
+
+logger = logging.getLogger(__name__)
+_LOAD_ERRORS: dict = {}
+_WARNED: set = set()
+
+
+# GLiNER reads at most 384 subword tokens; longer text is silently cut
+# ("Sentence of length 771 has been truncated to 384"), so anything past
+# the cut was never looked at. Found 2026-09-27 on a long email thread:
+# a company named only in the second half reached the provider. Text is
+# scanned in overlapping windows of whole lines instead; spans are matched
+# back against the full text afterwards, so window boundaries don't matter
+# for replacement.
+# 150 words still hit the limit on token-dense text (log lines,
+# placeholders): "truncated to 384" in the 2026-09-28 run. 80 words keeps
+# even dense text under it.
+WINDOW_WORDS = 80
+OVERLAP_WORDS = 15
+
+
+def _windows(text: str, max_words: int = WINDOW_WORDS, overlap: int = OVERLAP_WORDS) -> list:
+    words = text.split(" ")
+    if len(text.split()) <= max_words:
+        return [text]
+    out, start = [], 0
+    while start < len(words):
+        end = min(len(words), start + max_words)
+        out.append(" ".join(words[start:end]))
+        if end == len(words):
+            break
+        start = end - overlap
+    return out
+
+
+def _warn_once(key: str, msg: str, *args) -> None:
+    if key not in _WARNED:
+        _WARNED.add(key)
+        logger.warning(msg, *args)
+
 
 DEFAULT_MODEL = "urchade/gliner_medium-v2.1"
 
@@ -132,9 +174,10 @@ class GlinerRedactionResult:
     entities_found: int = 0
 
 
-def _placeholder_for(label: str, span: str) -> str:
-    digest = hashlib.sha256(span.encode("utf-8")).hexdigest()[:8]
-    return f"[[{label}_{digest}]]"
+def _placeholder_for(label: str, span: str, factory: Optional[PlaceholderFactory] = None) -> str:
+    # Keyed hash by default (see placeholders.py); readable [[LABEL_n]] when
+    # the caller passes a readable PlaceholderFactory.
+    return make_placeholder(label, span, factory)
 
 
 class GlinerRedactor:
@@ -155,6 +198,7 @@ class GlinerRedactor:
         self.model_name = model
         self.threshold = threshold
         self.labels = labels or DEFAULT_LABELS
+        self.last_error: Optional[BaseException] = None
 
     def _load(self):
         # Fast path: no lock needed just to READ an already-cached model
@@ -177,7 +221,14 @@ class GlinerRedactor:
                     "redaction_backend='gliner' was selected, but the `gliner` "
                     "package isn't installed. Run: pip install gliner"
                 ) from exc
-            model = GLiNER.from_pretrained(self.model_name)
+            if self.model_name in _LOAD_ERRORS:
+                # Don't retry (and re-download) on every call once a load failed.
+                raise _LOAD_ERRORS[self.model_name]
+            try:
+                model = GLiNER.from_pretrained(self.model_name)
+            except Exception as exc:
+                _LOAD_ERRORS[self.model_name] = exc
+                raise
             _MODEL_CACHE[self.model_name] = model
             return model
 
@@ -188,10 +239,16 @@ class GlinerRedactor:
         except Exception:
             return False
 
-    def redact(self, text: str) -> GlinerRedactionResult:
+    def redact(self, text: str, placeholders: Optional[PlaceholderFactory] = None) -> GlinerRedactionResult:
         try:
             model = self._load()
-        except Exception:
+        except Exception as exc:
+            # Loud, once per process: a silent fallback means names and
+            # companies quietly stop being protected.
+            self.last_error = exc
+            _warn_once(f"load:{self.model_name}",
+                       "tonst: GLiNER model %s failed to load (%r) -- names/companies/codenames are NOT "
+                       "being redacted; only regex redaction is running.", self.model_name, exc)
             # Fails soft, exactly like LLMRedactor: if the model can't
             # load (missing package, bad model name, etc.), the text
             # passes through with only the regex-layer redaction that
@@ -200,12 +257,19 @@ class GlinerRedactor:
 
         gliner_labels = list(self.labels.values())
         try:
-            entities = model.predict_entities(text, gliner_labels, threshold=self.threshold)
-        except Exception:
+            entities = []
+            for window in _windows(text):
+                entities.extend(model.predict_entities(window, gliner_labels, threshold=self.threshold))
+        except Exception as exc:
+            self.last_error = exc
+            _warn_once(f"predict:{self.model_name}",
+                       "tonst: GLiNER prediction failed (%r) -- names/companies/codenames are NOT being "
+                       "redacted for this text.", exc)
             return GlinerRedactionResult(redacted_text=text, mapping={}, model_available=False, entities_found=0)
 
         mapping: dict[str, str] = {}
         result_text = text
+        name_spans: list[str] = []
         # See _PLACEHOLDER_INNER_RE's comment above: reject any GLiNER
         # span that is the inner content of a placeholder already
         # produced, even if GLiNER stripped the surrounding brackets.
@@ -230,13 +294,25 @@ class GlinerRedactor:
             if span not in result_text:
                 continue
             tag = _LABEL_TO_TAG.get(gliner_label, "PII")
-            placeholder = _placeholder_for(tag, span)
+            if not_worth_hiding(span, tag.upper()):
+                continue
+            if tag == "NAME":
+                # People go through names.apply_names() below: one entity per
+                # person, with first/last-name parts (see names.py).
+                name_spans.append(span)
+                continue
+            placeholder = _placeholder_for(tag, span, placeholders)
             mapping[placeholder] = span
+            remember_entity(placeholders, tag, span)
             # Replace EVERY occurrence, not just the first -- see the
             # 2026-09-13 fix/postmortem in redact_llm.py for why a
             # count=1 limit is a real PII leak, not just a missed
             # optimization, when the same span repeats in the source.
             result_text = result_text.replace(span, placeholder)
+
+        name_spans += context_name_spans(result_text)
+        result_text = apply_names(result_text, name_spans, mapping, placeholders)
+        result_text = apply_known_entities(result_text, mapping, placeholders)
 
         return GlinerRedactionResult(
             redacted_text=result_text,
