@@ -275,7 +275,7 @@ def test_hint_lists_owners_only_when_known():
     assert build_hint("no contacts here") == HINT_BASE + "\n\n"
     assert build_hint("Hi [[NAME_1]]") == PLACEHOLDER_HINT
     hint = build_hint("Text [[NAME_2]] on [[PHONE_1]].")
-    assert hint.endswith("Contact details: [[PHONE_1]] is [[NAME_2]]'s own -- never present them as anyone else's.\n\n")
+    assert hint.endswith("Contact details: [[PHONE_1]] is [[NAME_2]]'s own -- never present them as anyone else's, including the sender's.\n\n")
 
 
 def test_client_sends_owner_hint():

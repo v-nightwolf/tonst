@@ -148,7 +148,11 @@ HINT_BASE = (
 )
 # Only when the text has a person placeholder: lets the model write
 # "Hi [[NAME_1.first]]" instead of repeating the full name everywhere.
-HINT_NAMES = " [[NAME_x.first]] and [[NAME_x.last]] are [[NAME_x]]'s first and last name; use them where only one is needed."
+# Wording matters: "use them where only one is needed" (2026-09-28 short-note
+# run) made Claude shorten owners to first names and write "Dr. [[NAME_1.first]]",
+# dropping must-have full names; the original "where you'd use just a first or
+# last name" didn't.
+HINT_NAMES = " [[NAME_x.first]] and [[NAME_x.last]] are [[NAME_x]]'s first and last name; use them only where you'd use just a first or last name."
 # The fullest fixed note (base + names). Kept as a name for callers and tests.
 PLACEHOLDER_HINT = HINT_BASE + HINT_NAMES + "\n\n"
 
@@ -216,8 +220,9 @@ def hint_parts(text: str) -> tuple:
     parts = [f"{' and '.join(cs)} {'is' if len(cs) == 1 else 'are'} {person}'s own" for person, cs in by_person.items()]
     # Worded as ownership, not just association: with "belongs to", Claude
     # still offered a customer's own email and phone as the support contact
-    # (2026-09-27, 12-case run).
-    return fixed, "Contact details: " + "; ".join(parts) + " -- never present them as anyone else's."
+    # (2026-09-27, 12-case run). "including the sender's": in the 2026-09-28
+    # run Claude signed a sales email with the recipient's name and email.
+    return fixed, "Contact details: " + "; ".join(parts) + " -- never present them as anyone else's, including the sender's."
 
 
 def build_hint(text: str) -> str:
