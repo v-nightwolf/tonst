@@ -53,11 +53,14 @@ latency tradeoff, not a guess.
 """
 
 from __future__ import annotations
+import inspect
+import logging
 import time
 from dataclasses import dataclass, field, replace
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
-from .redact import redact, redact_with_llm, restore_placeholders, RedactionResult
+from .placeholders import PLACEHOLDER_HINT, PlaceholderFactory, build_hint, contains_placeholder
+from .redact import EMAIL_STYLES, redact, redact_with_llm, restore_placeholders, RedactionResult, _check_categories
 from .redact_llm import LLMRedactor
 from .trim import mechanical_trim, estimate_tokens, flatten_messages
 from .local_model import LocalCompressor
@@ -84,6 +87,8 @@ class OptimizationReport:
     # Count of redacted fields by placeholder LABEL only ({"EMAIL": 2}) --
     # never values or placeholder hashes (see savings_log.py for why).
     redacted_types: dict = field(default_factory=dict)
+    # API keys / tokens / passwords found in the input and not sent.
+    secrets_withheld: int = 0
 
     # History compaction (query_messages() only).
     history_compacted: bool = False
@@ -187,6 +192,37 @@ class StructuredRedactionResult:
         return restore_placeholders(text, self.mapping)
 
 
+
+logger = logging.getLogger(__name__)
+
+
+def _accepts_placeholders(redactor) -> bool:
+    """Real redactors take redact(text, placeholders=...); duck-typed ones
+    (e.g. test fakes) may only take redact(text)."""
+    try:
+        return "placeholders" in inspect.signature(redactor.redact).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+# Neutral and conventional: "[secret withheld by tonst]" was graded as a
+# stray artifact in answers (2026-09-28).
+SECRET_WITHHELD = "[REDACTED]"
+SECRET_NOTICE = (
+    "(tonst: your message contained {n} secret{s} -- API key, token or password. "
+    "It was not sent to the AI provider. If it's real, don't paste it elsewhere and consider rotating it.)"
+)
+
+
+def _with_system_note(messages: list, note: str) -> list:
+    """Prepend `note` to the first system message, or add one at the front."""
+    out = list(messages)
+    for i, m in enumerate(out):
+        if m.get("role") == "system" and isinstance(m.get("content"), str):
+            out[i] = {**m, "content": note + "\n\n" + m["content"]}
+            return out
+    return [{"role": "system", "content": note}] + out
+
+
 class TonstClient:
     def __init__(
         self,
@@ -211,6 +247,12 @@ class TonstClient:
         input_price_per_million: Optional[float] = None,
         token_counter: Optional[Callable[[str], Optional[int]]] = None,
         messages_fn: Optional[Callable[[list], object]] = None,
+        placeholder_style: str = "hash",
+        extra_redaction: Sequence[str] = (),
+        placeholder_hint: bool = True,
+        email_style: str = "split",
+        restore_secrets: bool = False,
+        secret_notice: bool = False,
     ):
         """
         call_fn / messages_fn -- how tonst calls YOUR model. Pass at least one.
@@ -263,6 +305,42 @@ class TonstClient:
             better). Requires `pip install gliner`, only imported if
             this backend is actually selected -- not a hard dependency
             of tonst otherwise.
+
+        placeholder_style -- how redacted values are replaced (see
+        placeholders.py):
+          - "hash" (default): [[EMAIL_3f2a91c0]], an HMAC keyed with a
+            secret stored only on this machine. Stable across calls and
+            processes, so prompt caching keeps working.
+          - "readable": [[EMAIL_1]], [[NAME_2]] -- numbered in order of
+            first appearance and kept for the life of this client, so a
+            conversation uses one consistent numbering.
+
+        extra_redaction -- opt-in detectors on top of the always-on set
+        (emails, phones, cards, SSNs, IPs, secrets/API keys):
+        "ACCOUNT_ID" (account/customer/invoice/order numbers) and "MONEY"
+        (amounts with a currency). Off by default because the model then
+        can't see or reason about those values.
+
+        placeholder_hint -- when the text sent contains placeholders, put a
+        one-sentence note in front telling the model they stand in for
+        real values and must be copied verbatim (placeholders.py
+        PLACEHOLDER_HINT, ~45 tokens). On by default: without it Claude
+        often rewrote or questioned the tokens (see research notes,
+        2026-09-27). Added to the prompt for call_fn, and as a system
+        message for messages_fn.
+
+        email_style -- "split" (default): an address becomes
+        [[EMAIL_1]]@[[DOMAIN_1]], hiding both parts while addresses at the
+        same domain share a [[DOMAIN_n]], so the model can still group them.
+        "whole": one [[EMAIL_1]] per address.
+
+        restore_secrets / secret_notice -- API keys, tokens and passwords are
+        always withheld from the provider (report.secrets_withheld counts
+        them, and a warning is logged). restore_secrets=False keeps them
+        out of the answer too ("[secret withheld]" instead of the real
+        value, e.g. for a rewritten code-review comment). secret_notice=True
+        appends one line to the answer telling the user secrets were found
+        and not sent -- the provider can no longer warn them itself.
 
         redaction_model / compression_model / compaction_model each
         default to `local_model` when not given, so existing single-
@@ -367,6 +445,15 @@ class TonstClient:
         # rather than specifically "the Ollama one ran".
         self.use_enhanced_redaction = redaction_backend in ("ollama", "gliner")
 
+        self.placeholders = PlaceholderFactory(placeholder_style)
+        self.placeholder_hint = placeholder_hint
+        if email_style not in EMAIL_STYLES:
+            raise ValueError(f"email_style must be one of {EMAIL_STYLES}, got {email_style!r}")
+        self.email_style = email_style
+        self.restore_secrets = restore_secrets
+        self.secret_notice = secret_notice
+        self.extra_redaction = _check_categories(extra_redaction)
+
         self.llm_redactor: Optional[LLMRedactor] = None
         self.gliner_redactor = None
         if redaction_backend == "ollama":
@@ -466,16 +553,46 @@ class TonstClient:
                 input_price_per_million=self.input_price_per_million,
             )
 
+    def _finish(self, text: str, mapping: dict, final: bool = True) -> str:
+        """Restore real values into the model's answer, applying the
+        restore_secrets / secret_notice options."""
+        secrets = [ph for ph in mapping if ph.startswith("[[SECRET_")]
+        if secrets and not self.restore_secrets:
+            mapping = {k: v for k, v in mapping.items() if k not in secrets}
+            for ph in secrets:
+                text = text.replace(ph, SECRET_WITHHELD)
+        text = restore_placeholders(text, mapping, neutralize_unknown=final)
+        if secrets and self.secret_notice:
+            n = len(secrets)
+            text = text.rstrip() + "\n\n" + SECRET_NOTICE.format(n=n, s="" if n == 1 else "s")
+        return text
+
+    def _warn_secrets(self, mapping: dict) -> int:
+        n = sum(1 for ph in mapping if ph.startswith("[[SECRET_"))
+        if n:
+            logger.warning(
+                "tonst: %d secret%s (API keys/tokens/passwords) found in the input and NOT sent to the "
+                "provider. If they are real, treat them as exposed wherever else they were pasted and rotate them.",
+                n, "" if n == 1 else "s",
+            )
+        return n
+
     def _redact(self, text: str):
         if self.redaction_backend == "none":
             return RedactionResult(redacted_text=text, mapping={})
         if self.redaction_backend == "regex":
-            return redact(text)
+            return redact(text, placeholders=self.placeholders, extra_categories=self.extra_redaction,
+                          email_style=self.email_style)
         # "ollama" and "gliner" both expose a duck-type-compatible
         # .redact(text) -> object with .redacted_text/.mapping, so the
         # same regex-then-secondary-pass helper works for either one.
         secondary = self.llm_redactor if self.redaction_backend == "ollama" else self.gliner_redactor
-        return redact_with_llm(text, secondary)
+        # Hash style is the module default, so only hand the factory over
+        # for readable style -- keeps duck-typed redactors with the plain
+        # redact(text) signature working.
+        factory = self.placeholders if _accepts_placeholders(secondary) else None
+        return redact_with_llm(text, secondary, placeholders=factory, extra_categories=self.extra_redaction,
+                               email_style=self.email_style)
 
     def _call_text(self, prompt: str) -> tuple:
         """Send one flat prompt: call_fn if given, else one user message to messages_fn."""
@@ -488,7 +605,7 @@ class TonstClient:
         self._log(report, "query")
         return final_response, report
 
-    def _run(self, prompt: str) -> tuple[str, OptimizationReport]:
+    def _run(self, prompt: str, final_restore: bool = True) -> tuple[str, OptimizationReport]:
         # The actual pipeline behind every query_* method. Kept separate
         # from query() so the wrappers (query_structured, query_messages,
         # query_rag) can adjust the report and log it exactly once.
@@ -522,6 +639,9 @@ class TonstClient:
             trimmed, locally_compressed = self.compressor.compress(trimmed)
         t3 = time.perf_counter()
 
+        if self.placeholder_hint and contains_placeholder(trimmed):
+            trimmed = build_hint(trimmed) + trimmed
+
         sent_tokens, sent_exact, sent_ms = self._count(trimmed)
         t3 = time.perf_counter()  # keep counting time out of call_ms
 
@@ -533,14 +653,15 @@ class TonstClient:
         t4 = time.perf_counter()
 
         # 5. Put real values back for the end user/app.
-        final_response = redaction.restore(raw_response)
+        final_response = self._finish(raw_response, redaction.mapping, final=final_restore)
         t5 = time.perf_counter()
 
         report = OptimizationReport(
             original_tokens=original_tokens,
             sent_tokens=sent_tokens,
-            redacted_fields=len(redaction.mapping),
+            redacted_fields=sum(redacted_types_from_mapping(redaction.mapping).values()),
             redacted_types=redacted_types_from_mapping(redaction.mapping),
+            secrets_withheld=self._warn_secrets(redaction.mapping),
             locally_compressed=locally_compressed,
             used_enhanced_redaction=self.use_enhanced_redaction,
             redaction_ms=(t1 - t0) * 1000 - orig_ms,
@@ -649,6 +770,11 @@ class TonstClient:
             else m
             for m in messages
         ]
+        if self.placeholder_hint and any(
+            isinstance(m.get("content"), str) and contains_placeholder(m["content"]) for m in trimmed
+        ):
+            joined = "\n".join(m["content"] for m in trimmed if isinstance(m.get("content"), str))
+            trimmed = _with_system_note(trimmed, build_hint(joined).strip())
         t1 = time.perf_counter()
         sent_tokens, sent_exact, sent_ms = self._count(flatten_messages(trimmed))
         t2 = time.perf_counter()
@@ -816,14 +942,14 @@ class TonstClient:
             final_response, report = self._run_messages(compacted_messages, rolling_state)
         else:
             flat_prompt = flatten_messages(compacted_messages)
-            final_response, report = self._run(flat_prompt)
+            final_response, report = self._run(flat_prompt, final_restore=False)
 
         # final_response was restored against _run()'s OWN mapping,
         # which is empty (flat_prompt was already redacted, so its
         # internal _redact() pass found nothing new). Apply the REAL
         # mapping collected above -- this is what actually puts real PII
         # back if the model echoed a placeholder in its response.
-        final_response = restore_placeholders(final_response, mapping)
+        final_response = self._finish(final_response, mapping)
 
         redaction_ms = (t_redact - t_start) * 1000
         compaction_ms = (t_compact - t_redact) * 1000
@@ -831,8 +957,9 @@ class TonstClient:
         report = replace(
             report,
             original_tokens=original_tokens,
-            redacted_fields=len(mapping),
+            redacted_fields=sum(redacted_types_from_mapping(mapping).values()),
             redacted_types=redacted_types_from_mapping(mapping),
+            secrets_withheld=self._warn_secrets(mapping),
             redaction_ms=report.redaction_ms + redaction_ms,
             compaction_ms=compaction_ms,
             counting_ms=report.counting_ms + orig_ms,

@@ -69,4 +69,7 @@ def flatten_messages(messages: list[dict]) -> str:
 def mechanical_trim(text: str) -> str:
     text = strip_redundant_whitespace(text)
     text = dedupe_repeated_lines(text)
-    return text
+    # Removing duplicate lines leaves their blank neighbours behind (seen
+    # 2026-09-27: a re-quoted email thread ended in a dozen empty lines),
+    # so collapse whitespace once more.
+    return strip_redundant_whitespace(text)

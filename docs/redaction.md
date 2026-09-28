@@ -121,3 +121,90 @@ instead of one shared model compromising on every job — see the
 The old `use_enhanced_redaction=True` boolean still works (it now maps
 to `redaction_backend="ollama"` for backward compatibility) but new code
 should use `redaction_backend` directly.
+
+
+## Placeholders and extra detectors (tonst)
+
+**Keyed placeholders.** The hash in `[[EMAIL_3f2a91c0]]` is an HMAC keyed
+with a secret that never leaves your machine: `TONST_PLACEHOLDER_KEY` if
+set, otherwise `~/.tonst/placeholder.key` (created on first use, 0600).
+A bare hash of the value would let anyone holding the prompt confirm a
+guessed email or phone number offline; a keyed hash doesn't.
+
+**Readable placeholders.** `TonstClient(placeholder_style="readable")`
+produces `[[EMAIL_1]]`, `[[NAME_2]]`, numbered in order of first appearance
+and kept for the life of the client, so a whole conversation uses one
+numbering. Unlike the hash style they aren't stable across processes.
+
+**Secrets (always on).** Anthropic/OpenAI keys, AWS access key IDs, GitHub
+and Slack tokens, Google API keys, JWTs, PEM private keys, and the value in
+`password=` / `api_key:` / `client_secret=`-style assignments →
+`[[SECRET_…]]`.
+
+**Opt-in categories.** `TonstClient(extra_redaction=["ACCOUNT_ID", "MONEY"])`
+(or `redact(text, extra_categories=[...])`):
+
+- `ACCOUNT_ID` — the number after account / customer / client / member /
+  policy / invoice / order / ticket (must contain a digit).
+- `MONEY` — amounts with a currency symbol or code (`$14,821.32`, `₹12 lakh`,
+  `149 rupees`, `20 USD`).
+
+Off by default because the model then can't see or calculate with those
+values; the answer-quality benchmark decides whether that trade-off is worth it.
+
+## People, emails and secrets (tonst, Phase 3)
+
+These come from reading the answers in the 100-prompt benchmark
+(`experiments/privacy_quality`), where they were the main remaining causes
+of lower-quality answers.
+
+**One placeholder per person.** Names found by GLiNER or the local LLM go
+through `tonst/names.py`: "Omar Haddad" → `[[NAME_1]]`, a later "Omar" →
+`[[NAME_1.first]]`, "Dr. Haddad" → `Dr. [[NAME_1.last]]`. The model can write
+"Hi [[NAME_1.first]]", which restores to "Hi Omar". First and last names of
+every detected person are also matched on their own, which catches mentions
+the detector missed. A TonstClient remembers people across calls; if two
+people share a first name, a bare first name gets its own placeholder rather
+than a guess.
+
+**Split emails.** `a.b@veltrix.io` → `[[EMAIL_1]]@[[DOMAIN_1]]`: both parts are
+hidden, but addresses at the same domain share `[[DOMAIN_1]]`, so "group
+these by company" still works. `[[EMAIL_1]]` alone restores the whole address.
+`TonstClient(email_style="whole")` restores the old one-token form.
+
+**Secrets.** API keys, tokens and passwords are never sent.
+`report.secrets_withheld` counts them and a warning is logged.
+`secret_notice=True` appends a one-line notice to the answer (the provider
+can no longer warn the user itself); `restore_secrets=False` keeps the real
+value out of the answer too.
+
+**Restore fixes.** "Project [[CODENAME_1]]" with the value "Project Marigold"
+no longer becomes "Project Project Marigold". `[[NAME_1.first]]` is never
+broken up by `[[NAME_1]]`.
+
+## Addresses, recall safety nets, contact owners, streaming (tonst, Phase 3)
+
+**Addresses (always on).** Regex patterns for number-first streets
+("1180 Folsom Street, San Francisco, CA 94103", "221B Baker Street, London
+NW1 6XE"), street-first forms ("Rua Augusta 1520", "Friedrichstraße 88, 10117
+Berlin"), "17 Rue de Rivoli, Paris" style, and Indian "Flat/House/Plot ...,
+City PIN" → `[[ADDRESS_n]]`. Unusual formats can still be missed.
+
+**Name safety net.** With the GLiNER or Ollama backend, names in positions
+that almost always mean a person — after a role ("my manager Daniel Okafor"),
+a greeting ("Dear Priya") or a field label ("Customer: Priya Nair") — are
+added to whatever the detector found.
+
+**Remembered entities.** A TonstClient remembers companies and codenames it
+has detected, so a later mention the detector misses is still hidden.
+
+**Contact owners.** When an email or phone sits right next to a person
+("[[NAME_1]] ([[EMAIL_1]]@..., [[PHONE_1]])", "[[NAME_3]] on [[PHONE_3]]"), the
+hint adds "Contact details: [[PHONE_1]] belongs to [[NAME_1]]". Only
+placeholders are linked; deliberately narrow, so "tell [[NAME_1]] to call
+[[PHONE_2]]" is not linked.
+
+**Streaming.** `StreamRestorer(mapping)` (or `result.stream_restorer()`)
+restores a streamed answer chunk by chunk, holding back only a tail that
+could still become a placeholder. Known limit: the "Project Project"
+de-duplication can't apply across chunk boundaries.

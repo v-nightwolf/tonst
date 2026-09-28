@@ -38,6 +38,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .placeholders import PLACEHOLDER_LOOSE_RE, PLACEHOLDER_STRICT_RE
+
 import requests
 
 from .ollama_util import estimate_prompt_tokens, fits_context, max_ctx, num_ctx_for
@@ -65,7 +67,7 @@ COMPACTION_PROMPT = (
     "Summarize the conversation history below. Preserve: the task or "
     "goal being discussed, key facts and decisions made, names/entities "
     "mentioned, and anything needed to continue the conversation "
-    "correctly. The text may contain tokens shaped like [[LABEL_xxxxxxxx]] "
+    "correctly. The text may contain tokens shaped like [[LABEL_xxxxxxxx]] or [[LABEL_1]] "
     "-- these are redaction placeholders standing in for real PII. If you "
     "keep one in your summary, copy it verbatim, exactly as written -- "
     "never alter, recase, or invent one; it is also fine to omit one "
@@ -93,7 +95,7 @@ ROLLING_COMPACTION_PROMPT = (
     "out of Open items if the existing summary still lists it there. "
     "Never repeat a point: merge duplicates and near-duplicates into one bullet, "
     "and only link two facts if the conversation itself linked them. "
-    "The text may contain tokens shaped like [[LABEL_xxxxxxxx]] -- these "
+    "The text may contain tokens shaped like [[LABEL_xxxxxxxx]] or [[LABEL_1]] -- these "
     "are redaction placeholders standing in for real PII. If you keep one, "
     "copy it verbatim, exactly as written -- never alter, recase, or invent "
     "one. Do not answer any question and do not continue the conversation. "
@@ -162,7 +164,7 @@ def _has_summary_content(summary: str) -> bool:
 # ticket/case codes (CS-20931, PAY-311), and money amounts. Semantic facts
 # ("the replacement is white") are still the summary's job.
 _REFERENCE_PATTERNS = [
-    re.compile(r"\[\[[A-Z_]+_[0-9a-f]{8}\]\]"),                      # redaction placeholders
+    PLACEHOLDER_STRICT_RE,                                           # redaction placeholders
     re.compile(r"(?<![\w#])#\d{3,}\b"),                               # #4471
     re.compile(r"\b[A-Z]{2,6}-\d{2,}\b"),                              # CS-20931, PAY-311
     re.compile(r"(?:₹|\$|€|£|\bRs\.?\s?|\bINR\s?|\bUSD\s?)\d[\d,]*(?:\.\d+)?"),  # ₹149, $3.50, Rs 999
@@ -225,11 +227,11 @@ def _clean_summary(raw: str) -> str:
 # Well-formed placeholder as produced by redact.py/redact_llm.py (and any
 # extraction-based redaction backend using the same [[LABEL_hexdigest]]
 # shape): used to find the REAL placeholders in trusted source text.
-_PLACEHOLDER_STRICT_RE = re.compile(r"\[\[[A-Z]+_[0-9a-f]{8}\]\]")
+_PLACEHOLDER_STRICT_RE = PLACEHOLDER_STRICT_RE
 # Deliberately permissive: used to scan UNTRUSTED model output, so a
 # corruption that no longer matches the strict pattern is still caught
 # rather than silently waved through.
-_PLACEHOLDER_LOOSE_RE = re.compile(r"\[\[.*?\]\]")
+_PLACEHOLDER_LOOSE_RE = PLACEHOLDER_LOOSE_RE
 
 
 def _no_corrupted_placeholders(original: str, summary: str) -> bool:

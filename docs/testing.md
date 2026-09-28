@@ -18,17 +18,20 @@ with `cache_control` breakpoints.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest test_tonst.py -v
+pytest -v
 ```
 
-191 tests covering redaction round-trips (including placeholder
+315 tests across `test_tonst.py`, `test_privacy_phase1.py`,
+`test_privacy_benchmark.py` and `test_phase3.py`, covering redaction round-trips (including placeholder
 determinism, which caching depends on), the hallucination guard rail,
 fail-soft behavior when Ollama isn't running, trimming, prompt-caching
 structuring, history compaction (including the redact-before-compact
 ordering, the summary guard rail and rolling compaction), tool/MCP
 definition optimization, RAG chunk optimization, the savings log, the provider adapters and `messages_fn`, and
-the full `TonstClient` pipeline end to end. Runs automatically on every push via GitHub
-Actions (`.github/workflows/tests.yml`) across Python 3.9–3.12.
+keyed and readable placeholders, one entity per person, split emails, secrets
+handling, tolerant and streaming restore, the answer-quality benchmark's
+scoring, and the full `TonstClient` pipeline end to end. Runs automatically on every push via GitHub
+Actions (`.github/workflows/tests.yml`) across Python 3.10–3.13.
 
 ## Running the real API test
 

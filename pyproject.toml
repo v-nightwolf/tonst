@@ -1,13 +1,27 @@
 [project]
 name = "tonst"
-version = "0.1.0"
+version = "0.2.0"
 description = "Token optimization and security tool: prompt-caching structuring, PII redaction, and prompt trimming for LLM API calls."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "v-nightwolf", email = "info@nightwolf.in" }]
+keywords = ["llm", "tokens", "cost", "prompt-caching", "pii", "redaction", "privacy", "anthropic", "openai", "gemini"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+]
 dependencies = [
     "requests>=2.25",
 ]
+
+[project.urls]
+Homepage = "https://github.com/v-nightwolf/tonst"
+Issues = "https://github.com/v-nightwolf/tonst/issues"
 
 [project.scripts]
 # `tonst stats` -- summarizes the opt-in local savings log (tonst/savings_log.py).
@@ -20,7 +34,10 @@ local-model = []  # Ollama is a separate runtime, not a pip dependency
 # ML stack (torch, transformers, huggingface_hub). Only needed if this
 # backend is actually selected -- gliner_redact.py imports it lazily, and
 # every other redaction_backend (none/regex/ollama) works without it.
-gliner = ["gliner>=0.2"]
+# sentencepiece + protobuf: GLiNER's DeBERTa-v3 tokenizer can't load without
+# them on newer transformers releases (the model failed to load and redaction
+# silently fell back to regex-only).
+gliner = ["gliner>=0.2", "sentencepiece", "protobuf"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -30,6 +47,6 @@ build-backend = "setuptools.build_meta"
 include = ["tonst*"]
 
 [tool.pytest.ini_options]
-# The unit tests live in test_tonst.py. scripts/research/test_*.py are one-off
-# research scripts that need GLiNER/Ollama, not unit tests.
-testpaths = ["test_tonst.py"]
+# Unit tests (no network, no GLiNER/Ollama needed). scripts/research/test_*.py are
+# one-off research scripts that need GLiNER/Ollama, not unit tests.
+testpaths = ["test_tonst.py", "test_privacy_phase1.py", "test_privacy_benchmark.py", "test_phase3.py"]

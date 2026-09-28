@@ -35,13 +35,15 @@ Design choices that matter:
 
 from __future__ import annotations
 import ast
-import hashlib
 import json
 import logging
 import re
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+from .names import apply_known_entities, apply_names, context_name_spans, not_worth_hiding, remember_entity
+from .placeholders import PlaceholderFactory, make_placeholder
 
 import requests
 
@@ -77,7 +79,7 @@ home/mailing addresses, employer or company names when tied to a specific \
 person, and specific project codenames. Do NOT flag emails, phone numbers, \
 or card numbers -- those are handled separately.
 
-The text may already contain tokens shaped like [[LABEL_xxxxxxxx]] -- these \
+The text may already contain tokens shaped like [[LABEL_xxxxxxxx]] or [[LABEL_1]] -- these \
 are placeholders from an earlier redaction pass, not real text. Completely \
 ignore them: never include one in your output, never treat it as PII, and \
 never copy it (with or without surrounding words) into a "text" field.
@@ -108,9 +110,10 @@ class LLMRedactionResult:
     entities_found: int
 
 
-def _placeholder_for(label: str, span: str) -> str:
-    digest = hashlib.sha256(span.encode("utf-8")).hexdigest()[:8]
-    return f"[[{label}_{digest}]]"
+def _placeholder_for(label: str, span: str, factory: Optional[PlaceholderFactory] = None) -> str:
+    # Keyed hash by default (see placeholders.py); readable [[LABEL_n]] when
+    # the caller passes a readable PlaceholderFactory.
+    return make_placeholder(label, span, factory)
 
 
 def _default_ollama_call(prompt: str, model: str, timeout: float) -> Optional[str]:
@@ -290,7 +293,7 @@ class LLMRedactor:
         except requests.RequestException:
             return False
 
-    def redact(self, text: str) -> LLMRedactionResult:
+    def redact(self, text: str, placeholders: Optional[PlaceholderFactory] = None) -> LLMRedactionResult:
         raw = self._call_model(REDACTION_PROMPT.format(text=text), self.model, self.timeout)
         if raw is None:
             return LLMRedactionResult(redacted_text=text, mapping={}, model_available=False, entities_found=0)
@@ -298,6 +301,7 @@ class LLMRedactor:
         entities = _extract_json_array(raw)
         mapping: dict[str, str] = {}
         result_text = text
+        name_spans: list[str] = []
 
         for entity in entities:
             if not isinstance(entity, dict):
@@ -350,8 +354,16 @@ class LLMRedactor:
                 if not match:
                     continue
                 span = match.group(0)
-            placeholder = _placeholder_for(label, span)
+            if not_worth_hiding(span, label.upper()):
+                continue
+            if label.upper() == "NAME":
+                # People go through names.apply_names() below: one entity per
+                # person, with first/last-name parts (see names.py).
+                name_spans.append(span)
+                continue
+            placeholder = _placeholder_for(label, span, placeholders)
             mapping[placeholder] = span
+            remember_entity(placeholders, label, span)
             # Replace EVERY occurrence of this span, not just one.
             # BUG FOUND 2026-09-13 via scripts/research/diagnose_placeholder_inflation.py:
             # this used to be `.replace(span, placeholder, 1)` -- the
@@ -376,6 +388,10 @@ class LLMRedactor:
             # hash of the span), so redacting every occurrence still
             # restores correctly via restore_placeholders().
             result_text = result_text.replace(span, placeholder)
+
+        name_spans += context_name_spans(result_text)
+        result_text = apply_names(result_text, name_spans, mapping, placeholders)
+        result_text = apply_known_entities(result_text, mapping, placeholders)
 
         return LLMRedactionResult(
             redacted_text=result_text,
