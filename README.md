@@ -451,6 +451,7 @@ methods and every intermediate run are in [docs/results.md](docs/results.md).
 | Cache-aware compaction, short chats | Avoids a +14.9% loss that summarizing too early caused in a 12-turn Claude chat | Live API |
 | Prompt caching, Gemini 3.1 Flash-Lite, 6 domains | Net cost −53% across 24 calls | Live API |
 | Redaction + trim + compression, 360 prompts in 6 domains | Tokens −21.1%; 100% structured-PII recall with 0 leaks; 87.8% free-text PII recall with GLiNER | Local pipeline (API mocked) |
+| Mechanical trim on long, redundant inputs (privacy benchmark's heavy cases) | Input tokens −39% to −49% on re-quoted email threads, −40% to −48% on padded meeting transcripts; no saving on log dumps or small RAG sets | Live API |
 | Answer quality with redaction on, 100 work prompts | −0.46 (Claude Sonnet 4.6) and −0.42 (Gemini 3.8 Flash) on a 1–10 judge vs. unredacted; 100% of must-have values kept (preliminary) | Live API, blind LLM judge |
 | Compaction on long chats with caching | −18% at 40 turns, −55% at 100 turns | Simulation, calibrated to the live runs |
 
