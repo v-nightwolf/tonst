@@ -18,7 +18,10 @@ Redaction overhaul, measured with a new answer-quality benchmark
 - **Split emails**: `[[EMAIL_1]]@[[DOMAIN_1]]` (`email_style="whole"` for the old shape).
 - **Note to the model** (`placeholder_hint=True`): explains the placeholders,
   who owns which contact details, and that secrets are exposed credentials.
-  Adds ~50–130 input tokens when something was hidden.
+  Sent only when something was hidden, with only the lines that apply:
+  ~45 tokens, up to ~115 with names, contacts and secrets. In chats the fixed
+  part goes in the system message (cacheable) and the contact line rides on
+  the latest user message.
 - **New detectors**: API keys and other secrets (always on), postal addresses,
   more phone formats; opt-in `extra_redaction=["ACCOUNT_ID", "MONEY"]`.
 - **Secrets withheld from answers** by default (`[REDACTED]`,

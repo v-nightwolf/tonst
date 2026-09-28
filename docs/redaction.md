@@ -200,7 +200,7 @@ has detected, so a later mention the detector misses is still hidden.
 
 **Contact owners.** When an email or phone sits right next to a person
 ("[[NAME_1]] ([[EMAIL_1]]@..., [[PHONE_1]])", "[[NAME_3]] on [[PHONE_3]]"), the
-hint adds "Contact details: [[PHONE_1]] belongs to [[NAME_1]]". Only
+hint adds "Contact details: [[PHONE_1]] is [[NAME_1]]'s own". Only
 placeholders are linked; deliberately narrow, so "tell [[NAME_1]] to call
 [[PHONE_2]]" is not linked.
 

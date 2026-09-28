@@ -1334,7 +1334,7 @@ def test_query_rag_end_to_end_redacts_and_reports_chunks():
         return "Email [[EMAIL_" + body.split("[[EMAIL_")[1].split("]]")[0] + "]] for help."
 
     chunks = _CHUNKS + ["For refund problems, email support@acme.com and quote your order number."]
-    # hint off: this test is about chunk savings, and the ~40-token note would mask them at this tiny size
+    # hint off: this test is about chunk savings, and the note would mask them at this tiny size
     client = TonstClient(call_fn=fake_call, placeholder_hint=False)
     response, report = client.query_rag("how do I get a refund?", chunks, system="You are a support bot.")
     assert "support@acme.com" not in sent["prompt"]

@@ -336,7 +336,7 @@ def test_hint_added_only_when_placeholders_present():
     client.query("What is 2+2?")
     client.query("Email a@b.com about it")
     assert not sent[0].startswith("Note: tokens")
-    assert sent[1].startswith("Note: tokens in double square brackets")
+    assert sent[1].startswith("Note: tokens like [[EMAIL_x]]")
 
 
 def test_hint_can_be_turned_off():

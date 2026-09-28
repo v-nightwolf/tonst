@@ -88,7 +88,7 @@ VARIANTS = {
 # run any of the others.
 DEFAULT_VARIANTS = ["original", "hash_hint", "readable_hint"]
 
-from tonst.placeholders import PLACEHOLDER_HINT  # noqa: E402  (the same note TonstClient sends)
+from tonst.placeholders import strip_hint  # noqa: E402  (removes the note TonstClient sends)
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -188,7 +188,7 @@ def call_gemini(model, prompt, max_tokens=1200):
 def fake_call(model, prompt, max_tokens=1200):
     """Offline stand-in: 'answers' by echoing the request, so placeholders
     flow through and restoration is exercised. No network."""
-    text = "Draft:\n" + prompt.replace(PLACEHOLDER_HINT, "")
+    text = "Draft:\n" + strip_hint(prompt)
     return text, {"input": len(prompt) // 4, "output": len(text) // 4}
 
 

@@ -261,7 +261,7 @@ def test_client_remembers_companies_across_calls(monkeypatch):
 
 # ---------------------------------------------------------------- ownership hints
 
-from tonst.placeholders import build_hint, contact_owners  # noqa: E402
+from tonst.placeholders import HINT_BASE, build_hint, contact_owners  # noqa: E402
 
 
 def test_contact_owners_are_narrow():
@@ -272,7 +272,8 @@ def test_contact_owners_are_narrow():
 
 
 def test_hint_lists_owners_only_when_known():
-    assert build_hint("no contacts here") == PLACEHOLDER_HINT
+    assert build_hint("no contacts here") == HINT_BASE + "\n\n"
+    assert build_hint("Hi [[NAME_1]]") == PLACEHOLDER_HINT
     hint = build_hint("Text [[NAME_2]] on [[PHONE_1]].")
     assert hint.endswith("Contact details: [[PHONE_1]] is [[NAME_2]]'s own -- never present them as anyone else's.\n\n")
 
@@ -425,3 +426,41 @@ def test_public_service_hosts_not_hidden(monkeypatch):
     res = gr.GlinerRedactor(model="fake").redact(
         "curl https://api.anthropic.com/v1/models for Veltrix Logistics", placeholders=PlaceholderFactory("readable"))
     assert res.redacted_text == "curl https://api.anthropic.com/v1/models for [[EMPLOYER_1]]"
+
+
+# ---------------------------------------------------------------- smaller note (2026-09-28)
+
+from tonst.placeholders import HINT_NAMES, SECRET_HINT, hint_parts, strip_hint  # noqa: E402
+
+
+def test_note_only_includes_lines_that_apply():
+    assert HINT_NAMES not in build_hint("Call [[PHONE_1]]")
+    assert HINT_NAMES in build_hint("Hi [[NAME_1.first]]")
+    assert SECRET_HINT not in build_hint("Hi [[NAME_1]]")
+    assert SECRET_HINT in build_hint("key [[SECRET_GITHUB_TOKEN_1]]")
+
+
+def test_base_note_is_short():
+    assert len(HINT_BASE) // 4 <= 50  # ~tokens; the old note was ~110 on every masked request
+
+
+def test_strip_hint_round_trip():
+    body = "Reply to [[NAME_1]] ([[EMAIL_1]]@[[DOMAIN_1]])."
+    assert strip_hint(build_hint(body) + body) == body
+    assert strip_hint(body) == body
+
+
+def test_chat_note_keeps_system_prefix_stable():
+    sent = []
+    client = TonstClient(messages_fn=lambda msgs: (sent.append(msgs), "ok")[1], placeholder_style="readable")
+    history = [{"role": "system", "content": "You are a support bot."},
+               {"role": "user", "content": "Ticket from priya.nair@veltrix.io about order 7719."}]
+    client.query_messages(history)
+    history2 = history + [{"role": "assistant", "content": "Sure."},
+                          {"role": "user", "content": "Also cc ops@veltrix.io please."}]
+    client.query_messages(history2)
+    sys1 = [m for m in sent[0] if m["role"] == "system"][0]["content"]
+    sys2 = [m for m in sent[1] if m["role"] == "system"][0]["content"]
+    assert sys1 == sys2 and sys1.startswith(HINT_BASE)
+    fixed, variable = hint_parts("Text [[NAME_2]] on [[PHONE_1]].")
+    assert "Contact details" not in fixed and variable.startswith("Contact details")

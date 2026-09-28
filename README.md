@@ -525,10 +525,14 @@ deliberately left visible — hiding them from the provider protects nothing.
 - **Emails keep their shape.** `[[EMAIL_1]]@[[DOMAIN_1]]`: addresses at the
   same company share a domain placeholder, so "group these by company"
   still works.
-- **A one-line note to the model** (on by default, ~50–100 tokens) says the
-  tokens stand for real values, which contact details belong to whom, and
-  that `[[SECRET_…]]` tokens are exposed credentials. Without it, Claude
-  treated placeholders as template blanks in ~40% of answers.
+- **A short note to the model** (on by default, only when something was
+  hidden) says the tokens stand for real values. Extra lines are added only
+  when they apply: first/last-name parts when a person was hidden, whose
+  contact details are whose, and that `[[SECRET_…]]` tokens are exposed
+  credentials. About 45 tokens, up to ~115 with every line; in chats the
+  fixed part sits in the system message, where prompt caching makes repeat
+  reads ~90% cheaper. Without the note, Claude treated placeholders as
+  template blanks in ~40% of answers.
 - **Secrets never come back.** Keys are withheld from the provider and shown
   as `[REDACTED]` in answers; `report.secrets_withheld` counts them.
 - **Tolerant restore.** Placeholders the model reformats (`NAME_1`,
@@ -551,7 +555,7 @@ deliberately left visible — hiding them from the provider protects nothing.
   amounts (which is why hiding money is opt-in); see
   [the benchmark](#does-hiding-the-data-make-answers-worse).
 - **Privacy costs a few tokens.** When something was hidden, the note to the
-  model and the stable placeholders add ~50–130 input tokens. On short prompts
+  model (~45–115 tokens) and the longer stable placeholders add input tokens. On short prompts
   that can outweigh trimming; `placeholder_hint=False` turns the note off
   (not recommended for Claude).
 - **The mapping lives in memory.** Keep the request's result until the

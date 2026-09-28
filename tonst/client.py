@@ -59,7 +59,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Sequence
 
-from .placeholders import PLACEHOLDER_HINT, PlaceholderFactory, build_hint, contains_placeholder
+from .placeholders import PLACEHOLDER_HINT, PlaceholderFactory, build_hint, contains_placeholder, hint_parts
 from .redact import EMAIL_STYLES, redact, redact_with_llm, restore_placeholders, RedactionResult, _check_categories
 from .redact_llm import LLMRedactor
 from .trim import mechanical_trim, estimate_tokens, flatten_messages
@@ -221,6 +221,17 @@ def _with_system_note(messages: list, note: str) -> list:
             out[i] = {**m, "content": note + "\n\n" + m["content"]}
             return out
     return [{"role": "system", "content": note}] + out
+
+
+def _with_last_user_note(messages: list, note: str) -> list:
+    """Prepend `note` to the last user message (or add it to the system note if there is none)."""
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        m = out[i]
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            out[i] = {**m, "content": note + "\n\n" + m["content"]}
+            return out
+    return _with_system_note(out, note)
 
 
 class TonstClient:
@@ -774,7 +785,13 @@ class TonstClient:
             isinstance(m.get("content"), str) and contains_placeholder(m["content"]) for m in trimmed
         ):
             joined = "\n".join(m["content"] for m in trimmed if isinstance(m.get("content"), str))
-            trimmed = _with_system_note(trimmed, build_hint(joined).strip())
+            fixed, variable = hint_parts(joined)
+            # The fixed part goes in the system message, where the provider can
+            # cache it; the per-conversation contact line rides on the latest
+            # user message so it never changes the cached prefix.
+            trimmed = _with_system_note(trimmed, fixed)
+            if variable:
+                trimmed = _with_last_user_note(trimmed, variable)
         t1 = time.perf_counter()
         sent_tokens, sent_exact, sent_ms = self._count(flatten_messages(trimmed))
         t2 = time.perf_counter()

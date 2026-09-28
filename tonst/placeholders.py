@@ -138,15 +138,19 @@ class PlaceholderFactory:
 # Sonnet 4.6: without it the model often rewrote [[NAME_1]] as NAME_1 or
 # [NAME_1] or treated the tokens as unfilled template fields; with it,
 # restoration failures went 4/10 -> 0/10 and must-have values 64% -> 100%.
-PLACEHOLDER_HINT = (
-    # The examples deliberately don't match a real placeholder ([[NAME_x]], not
-    # [[NAME_1]]) so the note can never be confused with the data.
-    "Note: tokens in double square brackets, like [[NAME_x]] or [[EMAIL_x]], stand in for private details. "
-    "Treat each as the real value it represents and copy it into your answer exactly as written, "
-    "brackets included, wherever that value belongs. [[NAME_x.first]] and [[NAME_x.last]] are the first and "
-    "last name of the person [[NAME_x]]; use them where you'd use just a first or last name. "
-    "Don't use double square brackets for anything else.\n\n"
+# The note is built from parts so a request only pays for the lines that
+# apply to it (2026-09-28: the full note was ~110 tokens on every masked
+# request). The examples deliberately don't match a real placeholder
+# ([[NAME_x]], not [[NAME_1]]) so the note can never be confused with the data.
+HINT_BASE = (
+    "Note: tokens like [[EMAIL_x]] stand for real private values. Treat each as that value and copy it "
+    "exactly, brackets included, where it belongs. Don't use double square brackets otherwise."
 )
+# Only when the text has a person placeholder: lets the model write
+# "Hi [[NAME_1.first]]" instead of repeating the full name everywhere.
+HINT_NAMES = " [[NAME_x.first]] and [[NAME_x.last]] are [[NAME_x]]'s first and last name; use them where only one is needed."
+# The fullest fixed note (base + names). Kept as a name for callers and tests.
+PLACEHOLDER_HINT = HINT_BASE + HINT_NAMES + "\n\n"
 
 
 _PH = r"\[\[(?:NAME|EMAIL|PHONE)_(?:[0-9a-f]{8}|\d{1,6})(?:\.(?:first|last))?\]\]"
@@ -182,34 +186,52 @@ def contact_owners(text: str) -> dict:
 
 
 SECRET_HINT = (
-    " [[SECRET_...]] tokens (e.g. [[SECRET_GITHUB_TOKEN_x]]) are passwords, keys or tokens of that kind the user "
-    "pasted in plain text: treat them as exposed credentials (advise rotating them where relevant) and never "
-    "repeat them."
+    " [[SECRET_...]] tokens are passwords or keys the user pasted: treat them as exposed credentials "
+    "(advise rotating them where relevant) and never repeat them."
 )
 
 
-def build_hint(text: str) -> str:
-    """PLACEHOLDER_HINT plus, when known, which contact details belong to whom,
-    and -- when secrets were withheld -- that they are exposed credentials (the
-    model can then still give the "rotate this key" advice it gives on the
-    raw text; missing it cost ~2 points per engineering case, 2026-09-28)."""
+def hint_parts(text: str) -> tuple:
+    """
+    (fixed, variable) parts of the note for `text`.
+    fixed    -- the base line, plus the names line when a person placeholder
+                appears and the secrets line when a secret was withheld. It only
+                changes when a new kind of value first appears, so in a chat it
+                can sit in the (cached) system message.
+    variable -- which contact details belong to whom ("" if none known). It
+                grows as a conversation goes on, so chats send it with the
+                latest message instead of in the cached prefix.
+    """
+    fixed = HINT_BASE
+    if re.search(_NAME_PH, text):
+        fixed += HINT_NAMES
+    if "[[SECRET_" in text:
+        fixed += SECRET_HINT
     owners = contact_owners(text)
-    secret_note = SECRET_HINT if "[[SECRET_" in text else ""
     if not owners:
-        if not secret_note:
-            return PLACEHOLDER_HINT
-        return PLACEHOLDER_HINT.rstrip("\n") + secret_note + "\n\n"
+        return fixed, ""
     by_person: dict = {}
     for contact, person in owners.items():
         by_person.setdefault(person, []).append(contact)
-    parts = []
-    for person, contacts in by_person.items():
-        parts.append(f"{' and '.join(contacts)} {'is' if len(contacts) == 1 else 'are'} {person}'s own")
+    parts = [f"{' and '.join(cs)} {'is' if len(cs) == 1 else 'are'} {person}'s own" for person, cs in by_person.items()]
     # Worded as ownership, not just association: with "belongs to", Claude
     # still offered a customer's own email and phone as the support contact
     # (2026-09-27, 12-case run).
-    return (PLACEHOLDER_HINT.rstrip("\n") + " Contact details: " + "; ".join(parts)
-            + " -- never present them as anyone else's." + secret_note + "\n\n")
+    return fixed, "Contact details: " + "; ".join(parts) + " -- never present them as anyone else's."
+
+
+def build_hint(text: str) -> str:
+    """The whole note for a single prompt: only the lines that apply to `text`."""
+    fixed, variable = hint_parts(text)
+    return fixed + (" " + variable if variable else "") + "\n\n"
+
+
+def strip_hint(text: str) -> str:
+    """Remove a leading note added by build_hint() (used by tests and the benchmark's fake model)."""
+    if text.startswith(HINT_BASE):
+        i = text.find("\n\n")
+        return text[i + 2:] if i != -1 else ""
+    return text
 
 
 def contains_placeholder(text: str) -> bool:
