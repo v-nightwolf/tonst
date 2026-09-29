@@ -61,24 +61,22 @@ through a function you supply. Measured results are summarized
 
 ## Install
 
-Requires Python 3.10+. tonst isn't on PyPI yet; install it from GitHub:
+Requires Python 3.10+.
 
 ```bash
-pip install "git+https://github.com/v-nightwolf/tonst.git"
+pip install tonst
 ```
 
-For production, pin a specific commit or tag so an update never surprises you:
-
-```bash
-pip install "git+https://github.com/v-nightwolf/tonst.git@<commit-or-tag>"
-```
+For production, pin a version so an update never surprises you
+(`pip install "tonst==0.2.0"`). The latest unreleased code is on GitHub:
+`pip install "git+https://github.com/v-nightwolf/tonst.git"`.
 
 The only required dependency is `requests`. Two optional pieces add
 capability:
 
 | Optional piece | What it adds | Install |
 |---|---|---|
-| GLiNER | Free-text PII detection (names, companies, codenames) on CPU, ~0.2–1 s per request | `pip install "tonst[gliner] @ git+https://github.com/v-nightwolf/tonst.git"` (pulls in `torch`, `transformers`, `sentencepiece`, `protobuf`) |
+| GLiNER | Free-text PII detection (names, companies, codenames) on CPU, ~0.2–1 s per request | `pip install "tonst[gliner]"` (pulls in `torch`, `transformers`, `sentencepiece`, `protobuf`) |
 | [Ollama](https://ollama.com) | A local model for history summaries or compression, e.g. `ollama pull gemma2:2b` | Separate app, not a pip package |
 
 Neither is needed for the quickstart. If an optional piece is missing, the
@@ -572,8 +570,8 @@ deliberately left visible — hiding them from the provider protects nothing.
 - **Provider coverage:** Anthropic and Gemini have been tested live;
   the OpenAI module is built from OpenAI's documentation but hasn't been
   run against a real key yet.
-- **Not included yet:** async clients and a PyPI
-  release (streamed answers can be restored with `StreamRestorer`). The API call is always your own synchronous function.
+- **Not included yet:** async clients (streamed answers can be restored
+  with `StreamRestorer`). The API call is always your own synchronous function.
 
 ## Documentation
 
@@ -611,5 +609,5 @@ API keys go in a `.env` file in the repository root (gitignored).
 
 - **Whitepaper:** [Beyond the Prompt](https://claude.ai/artifact/2hcKTcfwBzAWev1PUGRv2x) · DOI [10.5281/zenodo.22745266](https://doi.org/10.5281/zenodo.22745266)
 - **License:** MIT (see [LICENSE](https://github.com/v-nightwolf/tonst/blob/main/LICENSE)).
-- **Tests:** `pip install -r requirements-dev.txt && pytest` (315 tests, run on every push for Python 3.10–3.13). Live API tests and benchmarks are described in [docs/testing.md](https://github.com/v-nightwolf/tonst/blob/main/docs/testing.md).
+- **Tests:** `pip install -r requirements-dev.txt && pytest` (319 tests, run on every push for Python 3.10–3.13). Live API tests and benchmarks are described in [docs/testing.md](https://github.com/v-nightwolf/tonst/blob/main/docs/testing.md).
 - Issues and pull requests are welcome.
