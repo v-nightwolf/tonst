@@ -68,7 +68,7 @@ pip install tonst
 ```
 
 For production, pin a version so an update never surprises you
-(`pip install "tonst==0.2.0"`). The latest unreleased code is on GitHub:
+(`pip install "tonst==0.2.1"`). The latest unreleased code is on GitHub:
 `pip install "git+https://github.com/v-nightwolf/tonst.git"`.
 
 The only required dependency is `requests`. Two optional pieces add
