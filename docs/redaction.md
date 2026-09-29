@@ -8,9 +8,7 @@ How tonst keeps personal data away from the cloud model, and how to choose a red
 
 - **Nothing here requires you to run a server.** The redaction and
   trimming logic run in-process, wherever your app already runs (your own
-  backend, not a third-party gateway). The only optional server-side piece
-  in a real product would be a lightweight usage/billing dashboard — no
-  inference, no GPUs.
+  backend, not a third-party gateway).
 - **Redaction + restoration is provider-agnostic and reversible.** Sensitive
   fields are swapped for placeholders before the call, and swapped back
   after — the cloud model never sees the real value, and your app never

@@ -599,7 +599,7 @@ tonst/              the library
 test_*.py           unit tests (CI runs all of them)
 experiments/        answer-quality benchmark for redaction (privacy_quality/)
 examples/           runnable demos: demo.py (no API key needed), real_api_demo.py, cache_savings_demo_*.py per provider
-benchmarks/         offline benchmark and live API tests (benchmark_free_features.py, live_test_*.py, benchmark_tonst.py)
+benchmarks/         offline benchmark and live API tests (benchmark_savings_features.py, live_test_*.py, benchmark_tonst.py)
 scripts/research/   one-off diagnostic and tuning scripts behind the findings in docs/ (need GLiNER or Ollama)
 docs/               detailed documentation
 ```

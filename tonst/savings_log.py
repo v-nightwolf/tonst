@@ -32,7 +32,7 @@ Honesty about the numbers:
     `usage=` and its real cache-read/cache-write token counts are
     recorded alongside, clearly separated from tonst's own estimates.
 
-Scope note (open-core boundary): this is a developer-facing savings log.
+Scope note: this is a developer-facing savings log.
 It is deliberately NOT an audit/compliance record -- it has no
 tamper-evidence, no retention policy, no signing, and it is written
 best-effort (a failed write never fails your API call). Don't present

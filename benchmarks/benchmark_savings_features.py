@@ -1,7 +1,7 @@
 """
-benchmarks/benchmark_free_features.py
+benchmarks/benchmark_savings_features.py
 --------------------------
-Offline, deterministic benchmark for the three free features whose value
+Offline, deterministic benchmark for the three savings features whose value
 can be measured without a paid API call:
 
   1. Tool filtering (tool_optimizer.select_tools / ToolSession):
@@ -26,7 +26,7 @@ NOT captured from real traffic. The numbers show how the mechanisms
 behave, including where they fail (the paraphrased-task group is there
 on purpose). Token counts use tonst's chars/4 estimate.
 
-Run:  python benchmarks/benchmark_free_features.py   (no network, no Ollama needed)
+Run:  python benchmarks/benchmark_savings_features.py   (no network, no Ollama needed)
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ TASKS = [
 # text -- and Claude correctly asked for the missing content, which was scored
 # as a miss). A few tasks have a second, genuinely reasonable FIRST step; the
 # live test counts these as correct, and says so in its output. Used only by
-# benchmarks/live_test_free_features.py -- the offline benchmark measures whether the
+# benchmarks/live_test_savings_features.py -- the offline benchmark measures whether the
 # needed tools were KEPT, not which one the model calls first.
 ACCEPTABLE_FIRST_STEPS = {
     "Run a SQL query counting signups per day last week in the analytics database": ["sql_list_tables"],
@@ -406,7 +406,7 @@ def _sim_conversation_cost(turns: int, **rolling_kwargs) -> dict:
     counts are tonst's estimate / 0.63 -- the estimate-to-real ratio the
     live run measured on this conversation.
     """
-    from live_test_free_features import _conversation, _handbook
+    from live_test_savings_features import _conversation, _handbook
     from tonst.compactor import HistoryCompactor, run_fold_job
 
     est_over_real = 0.63

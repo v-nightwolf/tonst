@@ -1,7 +1,7 @@
 """
 benchmarks/live_test_gemini.py
 -------------------
-The same live checks as benchmarks/live_test_free_features.py, against Google's
+The same live checks as benchmarks/live_test_savings_features.py, against Google's
 Gemini API instead of Anthropic's. Costs real money (the script prints an
 upper-bound estimate and asks before spending).
 
@@ -56,7 +56,7 @@ import time
 # Importing the Anthropic live script loads .env and gives us the shared
 # fixtures (tasks, conversation, handbook, fact list), so both providers
 # are tested on identical inputs.
-from live_test_free_features import (
+from live_test_savings_features import (
     TOOL_SYSTEM,
     FACTS_TO_KEEP,
     _handbook,
@@ -64,7 +64,7 @@ from live_test_free_features import (
     _fact_recall,
     _latency_summary,
 )
-from benchmark_free_features import TOOLS, TASKS, ACCEPTABLE_FIRST_STEPS
+from benchmark_savings_features import TOOLS, TASKS, ACCEPTABLE_FIRST_STEPS
 
 import requests
 
@@ -431,7 +431,7 @@ def _preflight(model: str, api_key: str, thinking: str) -> dict:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Live Gemini benchmark for tonst's free features")
+    p = argparse.ArgumentParser(description="Live Gemini benchmark for tonst's savings features")
     p.add_argument("--part", choices=("tools", "compaction", "all"), default="all")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--thinking", default="low",
