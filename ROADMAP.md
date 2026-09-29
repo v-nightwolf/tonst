@@ -321,7 +321,7 @@ assuming:
    README's "Testing against a real provider" section and files table
    updated accordingly.
 
-### Four free-tier features — shipped (Sept 2026)
+### Four savings features — shipped (Sept 2026)
 
 Chosen from a feasibility review of seven proposed ideas (see the
 project's research notes). The other three were not built: a
@@ -330,8 +330,7 @@ model routing (a different product that changes answer quality; the
 local-model benchmarks argue against it on typical hardware), and a
 prompt-injection scanner (a crowded category, and keyword detection
 gives false confidence).
-All four are free/MIT by design: they drive adoption. The paid tier
-stays centered on the audit/compliance trail, team policy and support.
+All four are MIT-licensed, like the rest of tonst.
 
 - **Rolling compaction** (`compact_history_rolling()`, `RollingSummary`,
   `query_messages(rolling_state=...)`). Fixes a real gap in the
@@ -355,11 +354,10 @@ stays centered on the audit/compliance trail, team policy and support.
 - **Savings log + `tonst stats`** (`savings_log.py`). Opt-in local JSONL
   of per-call metrics. It never records prompt text, PII values or
   placeholder hashes (hashes are brute-forceable). Token counts are
-  marked as estimates. This is the data layer for the hosted dashboard.
-  The open-core line: this free log is deliberately *not* an audit
+  marked as estimates. It is deliberately *not* an audit
   record (no tamper-evidence or retention).
 
-**Offline benchmark** (`benchmarks/benchmark_free_features.py`, hand-built but
+**Offline benchmark** (`benchmarks/benchmark_savings_features.py`, hand-built but
 realistic workloads, not real traffic; full table in the README):
 tool filtering reached 100% recall and 83% fewer tool tokens on direct
 requests (`top_k=5`, 36 tools). RAG dedupe alone cut 19% of context
@@ -394,7 +392,7 @@ Live measured: a ~1k-token fold took ~5s with gemma2:2b and the next
 turn reused it in 0 ms. The summary kept every key fact of the test
 conversation.
 
-`benchmarks/live_test_free_features.py` added: the real-API test for tools (all
+`benchmarks/live_test_savings_features.py` added: the real-API test for tools (all
 vs. filtered vs. deferred, with a correct-tool check), rolling vs.
 stateless compaction cache reads, and estimate accuracy.
 
@@ -453,7 +451,7 @@ stateless compaction cache reads, and estimate accuracy.
 **Ollama num_ctx fix (found before it bit):** Ollama's default context (2k-4k) silently drops the START of longer prompts, so summaries at the 3,000-token threshold would have lost the oldest turns.
 - `tonst/ollama_util.py` sizes num_ctx per request, capped by TONST_OLLAMA_MAX_CTX (8192).
 - Compaction and compression refuse over-long prompts; LLM redaction warns.
-- `benchmarks/live_test_free_features.py --long` added: ~500-token tool outputs, history ~13k tokens at the real 3,000 threshold; modes none / rolling / rolling_bg.
+- `benchmarks/live_test_savings_features.py --long` added: ~500-token tool outputs, history ~13k tokens at the real 3,000 threshold; modes none / rolling / rolling_bg.
 - 161/161 tests.
 
 **Long-history live run (12 turns, ~12.6k tokens):**
