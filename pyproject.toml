@@ -1,6 +1,6 @@
 [project]
 name = "tonst"
-version = "0.2.0"
+version = "0.2.1"
 description = "Token optimization and security tool: prompt-caching structuring, PII redaction, and prompt trimming for LLM API calls."
 readme = "README.md"
 requires-python = ">=3.10"

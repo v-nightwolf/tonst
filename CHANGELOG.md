@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — 2026-09-29
+
+- Documentation wording updates; install from PyPI.
+
 ## 0.2.0 — 2026-09-28
 
 Redaction overhaul, measured with a new answer-quality benchmark
