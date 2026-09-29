@@ -21,7 +21,7 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-315 tests across `test_tonst.py`, `test_privacy_phase1.py`,
+319 tests across `test_tonst.py`, `test_privacy_phase1.py`,
 `test_privacy_benchmark.py` and `test_phase3.py`, covering redaction round-trips (including placeholder
 determinism, which caching depends on), the hallucination guard rail,
 fail-soft behavior when Ollama isn't running, trimming, prompt-caching
